@@ -1,5 +1,5 @@
 import { getPipedriveAccessToken } from './tokenService.js';
-import axios from 'axios'; // Changed to import
+import axios from 'axios';
 
 export async function getPipedriveUserMe(apiDomain, accessToken) {
     const userMeUrl = `${apiDomain}/v1/users/me`;
@@ -12,26 +12,63 @@ export async function getPipedriveUserMe(apiDomain, accessToken) {
     return userResponse.data.data;
 }
 
-export async function getDealDetails(apiDomain, accessToken, dealId) {
-    const url = `${apiDomain}/v1/deals/${dealId}`;
-    const response = await axios.get(url, { headers: { 'Authorization': `Bearer ${accessToken}` } });
-    return response.data.data;
-}
+export const getDealDetails = async (apiDomain, accessToken, dealId) => {
+    if (!accessToken || !apiDomain) {
+        console.error("Missing Pipedrive API domain or access token for getDealDetails.");
+        throw new Error("Pipedrive API domain or access token not available.");
+    }
+    try {
+        const response = await axios.get(`${apiDomain}/v1/deals/${dealId}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        return response.data.data;
+    } catch (error) {
+        console.error('Error fetching Pipedrive deal details:', error.response ? error.response.data : error.message);
+        throw error;
+    }
+};
 
-export async function getPersonDetails(apiDomain, accessToken, personId) {
-    const url = `${apiDomain}/v1/persons/${personId}`;
-    const response = await axios.get(url, { headers: { 'Authorization': `Bearer ${accessToken}` } });
-    return response.data.data;
-}
+export const getPersonDetails = async (apiDomain, accessToken, personId) => {
+    if (!accessToken || !apiDomain) {
+        console.error("Missing Pipedrive API domain or access token for getPersonDetails.");
+        throw new Error("Pipedrive API domain or access token not available.");
+    }
+    try {
+        const response = await axios.get(`${apiDomain}/v1/persons/${personId}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        return response.data.data;
+    } catch (error) {
+        console.error('Error fetching Pipedrive person details:', error.response ? error.response.data : error.message);
+        throw error;
+    }
+};
 
-export async function getOrganizationDetails(apiDomain, accessToken, orgId) {
-    // Assuming a similar structure for organization details if needed
-    const url = `${apiDomain}/v1/organizations/${orgId}`;
-    const response = await axios.get(url, { headers: { 'Authorization': `Bearer ${accessToken}` } });
-    return response.data.data;
-}
+export const getOrganizationDetails = async (apiDomain, accessToken, orgId) => {
+    if (!accessToken || !apiDomain) {
+        console.error("Missing Pipedrive API domain or access token for getOrganizationDetails.");
+        throw new Error("Pipedrive API domain or access token not available.");
+    }
+    if (!orgId) {
+        console.error("Organization ID is required for getOrganizationDetails.");
+        throw new Error("Organization ID not provided.");
+    }
+    try {
+        const response = await axios.get(`${apiDomain}/v1/organizations/${orgId}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        return response.data.data; // Pipedrive API typically wraps data in a 'data' object
+    } catch (error) {
+        console.error('Error fetching Pipedrive organization details:', error.response ? error.response.data : error.message);
+        // Optionally, check for 404 specifically if needed
+        // if (error.response && error.response.status === 404) {
+        //     return null; // Or throw a custom "NotFound" error
+        // }
+        throw error; // Re-throw to be handled by the caller
+    }
+};
 
-export async function getDealProducts(apiDomain, accessToken, dealId) {
+export const getDealProducts = async (apiDomain, accessToken, dealId) => {
     const url = `${apiDomain}/v1/deals/${dealId}/products`;
     const response = await axios.get(url, { headers: { 'Authorization': `Bearer ${accessToken}` } });
     return response.data.data || [];
@@ -39,23 +76,24 @@ export async function getDealProducts(apiDomain, accessToken, dealId) {
 
 // Add other Pipedrive API call functions as needed
 
-export const updateDealWithQuoteNumber = async (dealId, quoteNumber, companyId) => {
-  const accessToken = await getPipedriveAccessToken(companyId);
+export const updateDealWithQuoteNumber = async (apiDomain, accessToken, dealId, quoteNumber) => {
   if (!accessToken) {
-    throw new Error('Pipedrive access token not found.');
+    throw new Error('Pipedrive access token not provided.');
+  }
+  if (!apiDomain) {
+    throw new Error('Pipedrive API domain not provided.');
   }
 
-  const pipedriveApiUrl = process.env.PIPEDRIVE_API_URL;
-  const quoteCustomFieldKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY; // Ensure this is in your .env
+  const quoteCustomFieldKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY;
 
   if (!quoteCustomFieldKey) {
     console.error('PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY is not set in .env. Skipping deal update.');
-    return null; // Or throw an error if this update is critical
+    throw new Error('PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY is not configured.'); 
   }
 
   try {
     const response = await axios.put(
-      `${pipedriveApiUrl}/v1/deals/${dealId}`,
+      `${apiDomain}/v1/deals/${dealId}`,
       { [quoteCustomFieldKey]: quoteNumber },
       {
         headers: {
@@ -67,11 +105,9 @@ export const updateDealWithQuoteNumber = async (dealId, quoteNumber, companyId) 
     return response.data;
   } catch (error) {
     console.error(
-      'Error updating Pipedrive deal:',
-      error.response ? error.response.data : error.message
+      'Error updating Pipedrive deal field:', // Clarified error message
+      error.response ? JSON.stringify(error.response.data, null, 2) : error.message
     );
-    // Decide if this error should be propagated or handled (e.g., by logging and continuing)
-    // For now, let's re-throw to make the caller aware
-    throw error;
+    throw error; // Re-throw to be handled by the controller
   }
 };

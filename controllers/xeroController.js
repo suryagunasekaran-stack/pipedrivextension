@@ -1,7 +1,7 @@
 import * as tokenService from '../services/tokenService.js'; // Added .js and changed import style
 import * as pipedriveApiService from '../services/pipedriveApiService.js'; // Added .js and changed import style
 import * as xeroApiService from '../services/xeroApiService.js'; // Added .js and changed import style
-import { v4 as uuidv4 } from 'uuid'; // For idempotency key
+import { v4 as uuidv4 } from 'uuid';
 
 export const getXeroStatus = (req, res) => {
     const { pipedriveCompanyId } = req.query;
@@ -46,19 +46,36 @@ export const createXeroQuote = async (req, res) => {
             console.log(`Pipedrive token expired for ${pipedriveCompanyId} in createXeroQuote, attempting refresh.`);
             pdCompanyTokens = await tokenService.refreshPipedriveToken(pipedriveCompanyId);
         }
-        const pdApiDomain = pdCompanyTokens.apiDomain;
+        const pdApiDomain = pdCompanyTokens.apiDomain; // Ensure this is correctly retrieved/set during Pipedrive auth
         const pdAccessToken = pdCompanyTokens.accessToken;
 
         const dealDetails = await pipedriveApiService.getDealDetails(pdApiDomain, pdAccessToken, pipedriveDealId);
         if (!dealDetails) return res.status(404).json({ error: `Pipedrive Deal ${pipedriveDealId} not found.` });
 
+        // Fetch Organization details - this will be the primary contact entity in Xero
+        if (!dealDetails.org_id || !dealDetails.org_id.value) {
+            return res.status(400).json({ error: 'Pipedrive Deal is not associated with an Organization, which is required for the Xero contact.' });
+        }
+        // Assuming getOrganizationDetails exists in pipedriveApiService
+        const organizationDetails = await pipedriveApiService.getOrganizationDetails(pdApiDomain, pdAccessToken, dealDetails.org_id.value);
+        if (!organizationDetails) return res.status(404).json({ error: `Pipedrive Organization ${dealDetails.org_id.value} not found.` });
+
+        // Fetch Person details (for email, to associate with the Organization contact in Xero)
         let personDetails = null;
+        let contactEmail = null;
         if (dealDetails.person_id && dealDetails.person_id.value) {
             personDetails = await pipedriveApiService.getPersonDetails(pdApiDomain, pdAccessToken, dealDetails.person_id.value);
+            if (personDetails && personDetails.email && personDetails.email.length > 0) {
+                const primaryEmailEntry = personDetails.email.find(e => e.primary);
+                contactEmail = primaryEmailEntry ? primaryEmailEntry.value : personDetails.email[0].value;
+            }
         }
-        if (!personDetails) return res.status(404).json({ error: 'Pipedrive Person details not found for the deal.' });
         
-        const dealProducts = await pipedriveApiService.getDealProducts(pdApiDomain, pdAccessToken, pipedriveDealId);
+        const contactName = organizationDetails.name;
+
+        if (!contactName) { // Should be caught by organizationDetails check, but good to be safe.
+             return res.status(400).json({ error: 'Pipedrive organization has no name, which is required for Xero contact.' });
+        }
 
         // 2. Get Xero Tokens (and refresh if necessary)
         let xeroTokenInfo = tokenService.allXeroTokens[pipedriveCompanyId];
@@ -68,39 +85,45 @@ export const createXeroQuote = async (req, res) => {
 
         if (Date.now() >= xeroTokenInfo.tokenExpiresAt) {
             console.log(`Xero token expired for ${pipedriveCompanyId} in createXeroQuote, attempting refresh.`);
-            xeroTokenInfo = await tokenService.refreshXeroToken(pipedriveCompanyId);
+            xeroTokenInfo = await tokenService.refreshXeroToken(pipedriveCompanyId); // This should save the refreshed token
         }
         const xeroAccessToken = xeroTokenInfo.accessToken;
         const xeroTenantId = xeroTokenInfo.tenantId;
 
-        // 3. Xero Contact Management
+
+        // 3. Xero Contact Management (using Organization Name and Person's Email)
         let xeroContactID;
-        const contactEmail = personDetails.email && personDetails.email.find(e => e.primary)?.value;
-        const contactName = personDetails.name;
+        
+        // Try to find Xero contact by Organization Name
+        let existingXeroContact = await xeroApiService.findXeroContactByName(xeroAccessToken, xeroTenantId, contactName);
 
-        if (!contactName) {
-             return res.status(400).json({ error: 'Pipedrive person has no name, which is required for Xero contact.' });
-        }
-
-        const existingXeroContact = contactEmail ? await xeroApiService.findXeroContactByEmail(xeroAccessToken, xeroTenantId, contactEmail) : null;
         if (existingXeroContact) {
             xeroContactID = existingXeroContact.ContactID;
+            // Optional: If contactEmail is available and different from existingXeroContact.EmailAddress,
+            // you could update the contact here. For now, we'll use the existing contact as is.
+            console.log(`Found existing Xero contact by name '${contactName}': ID ${xeroContactID}`);
         } else {
+            // If not found by name, create a new contact
             const newContactPayload = {
                 Name: contactName,
-                EmailAddress: contactEmail || undefined
+                // Only add EmailAddress if contactEmail is not null/undefined
+                ...(contactEmail && { EmailAddress: contactEmail }) 
             };
+            console.log(`Creating new Xero contact with payload:`, newContactPayload);
             const createdContact = await xeroApiService.createXeroContact(xeroAccessToken, xeroTenantId, newContactPayload);
-            xeroContactID = createdContact.ContactID;
+            // createXeroContact now returns the contact object directly
+            xeroContactID = createdContact.ContactID; 
+            console.log(`Created new Xero contact '${contactName}': ID ${xeroContactID}`);
         }
 
         // 4. Prepare Xero Quote Data
+        const dealProducts = await pipedriveApiService.getDealProducts(pdApiDomain, pdAccessToken, pipedriveDealId);
         let lineItems = dealProducts.map(p => ({
             Description: p.name || 'N/A',
             Quantity: p.quantity || 1,
             UnitAmount: p.item_price || 0,
-            AccountCode: "200", // Placeholder
-            TaxType: "NONE"     // Placeholder
+            AccountCode: process.env.XERO_DEFAULT_ACCOUNT_CODE || "200", 
+            TaxType: process.env.XERO_DEFAULT_TAX_TYPE || "NONE"     
         }));
 
         if (lineItems.length === 0 && dealDetails.value && dealDetails.value > 0) {
@@ -108,8 +131,8 @@ export const createXeroQuote = async (req, res) => {
                 Description: dealDetails.title || "Deal Value",
                 Quantity: 1,
                 UnitAmount: dealDetails.value,
-                AccountCode: "200",
-                TaxType: "NONE"
+                AccountCode: process.env.XERO_DEFAULT_ACCOUNT_CODE || "200",
+                TaxType: process.env.XERO_DEFAULT_TAX_TYPE || "NONE"
              });
         } else if (lineItems.length === 0) {
             return res.status(400).json({ error: 'Cannot create a Xero quote with no line items and no deal value.'});
@@ -120,30 +143,55 @@ export const createXeroQuote = async (req, res) => {
             Contact: { ContactID: xeroContactID },
             Date: currentDate,
             LineItems: lineItems,
-            Status: "DRAFT"
+            Status: "DRAFT" // Or make this configurable / based on Pipedrive deal stage
         };
+        
+        const idempotencyKey = uuidv4();
+        const pipedriveDealReference = `Pipedrive Deal ID: ${pipedriveDealId}`;
 
         // 5. Create Quote in Xero
-        const createdQuote = await xeroApiService.createXeroQuote(xeroAccessToken, xeroTenantId, quotePayload);
+        const createdQuote = await xeroApiService.createQuote(xeroAccessToken, xeroTenantId, quotePayload, idempotencyKey, pipedriveDealReference);
         
-        // Update Pipedrive deal with Xero Quote Number
-        try {
-            await pipedriveApiService.updateDealWithQuoteNumber(pipedriveDealId, createdQuote.QuoteNumber, pipedriveCompanyId);
-        } catch (updateError) {
-            console.error('Failed to update Pipedrive deal with Xero quote number:', updateError.message);
-            // Handle error (e.g., log it, notify someone, etc.)
+        // 6. Update Pipedrive deal with Xero Quote Number
+        if (createdQuote && createdQuote.QuoteNumber) {
+            try {
+                // Ensure updateDealWithQuoteNumber is correctly imported/available in pipedriveApiService
+                // Pass pdApiDomain and pdAccessToken to updateDealWithQuoteNumber
+                await pipedriveApiService.updateDealWithQuoteNumber(pdApiDomain, pdAccessToken, pipedriveDealId, createdQuote.QuoteNumber);
+                console.log(`Pipedrive deal ${pipedriveDealId} updated with Xero quote number ${createdQuote.QuoteNumber}.`);
+                res.status(201).json({ 
+                    message: 'Xero quote created and Pipedrive deal updated successfully!', 
+                    quoteNumber: createdQuote.QuoteNumber, 
+                    quoteId: createdQuote.QuoteID,
+                    xeroContactID: xeroContactID,
+                    status: createdQuote.Status
+                });
+            } catch (updateError) {
+                console.error('Failed to update Pipedrive deal with Xero quote number:', updateError.message);
+                // Provide more structured error details for the Pipedrive update failure
+                const pipedriveErrorDetails = updateError.response ? updateError.response.data : (updateError.message || 'Unknown error during Pipedrive update.');
+                return res.status(201).json({ // Still 201 as Xero quote was created
+                    message: 'Xero quote created successfully, but failed to update Pipedrive deal.', 
+                    quoteNumber: createdQuote.QuoteNumber, 
+                    quoteId: createdQuote.QuoteID,
+                    xeroContactID: xeroContactID,
+                    status: createdQuote.Status,
+                    pipedriveUpdateError: {
+                        message: updateError.message,
+                        details: pipedriveErrorDetails
+                    }
+                });
+            }
+        } else {
+            console.error("Failed to create Xero quote or get QuoteNumber from response:", createdQuote);
+            res.status(500).json({ error: 'Failed to create Xero quote or quote data is missing in response.' });
         }
 
-        res.status(201).json({ 
-            message: 'Xero quote created successfully!', 
-            quoteNumber: createdQuote.QuoteNumber, 
-            quoteId: createdQuote.QuoteID,
-            xeroContactID: xeroContactID,
-            status: createdQuote.Status
-        });
-
     } catch (error) {
-        console.error('Error in /api/xero/create-quote:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
+        console.error('Error in /api/xero/create-quote:', error.response ? JSON.stringify(error.response.data, null, 2) : (error.details ? JSON.stringify(error.details) : error.message));
+        if (error.status && error.details) { // For custom error object from createQuote
+             return res.status(error.status).json({ error: error.message, details: error.details });
+        }
         if (error.response && error.response.data && error.response.data.Elements) {
             return res.status(400).json({ error: 'Xero API validation error.', details: error.response.data.Elements });
         }

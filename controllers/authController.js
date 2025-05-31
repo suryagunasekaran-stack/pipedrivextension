@@ -14,7 +14,14 @@ export const initiatePipedriveAuth = (req, res) => {
     const csrfToken = crypto.randomBytes(18).toString('hex');
     tokenService.setCsrfTokenStore(csrfToken); // Store CSRF token
 
-    const authorizationUrl = `https://oauth.pipedrive.com/oauth/authorize?client_id=${pipedriveClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${csrfToken}`;
+    // Define the required scopes
+    const scopes = [
+        'deals:full', // Allows reading, adding, updating, and deleting deals
+        'users:read'  // Allows reading users data (needed for /users/me)
+        // Add other scopes your app might need in the future, e.g., 'organizations:full', 'persons:full'
+    ].join(' ');
+
+    const authorizationUrl = `https://oauth.pipedrive.com/oauth/authorize?client_id=${pipedriveClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${csrfToken}&scope=${encodeURIComponent(scopes)}`;
     res.send(`<h1>Pipedrive OAuth Example</h1><a href="${authorizationUrl}">Connect to Pipedrive</a>`);
 };
 
