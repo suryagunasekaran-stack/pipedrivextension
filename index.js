@@ -4,21 +4,33 @@ const axios = require('axios');
 const crypto = require('crypto');
 const fs = require('fs').promises;
 const path = require('path');
+const cors = require('cors'); // Add this
 
 const app = express();
+
+// Enable CORS - configure appropriately for production
+app.use(cors({
+    origin: 'http://localhost:3001' // Allow requests from your Next.js app's origin
+}));
+
 const port = process.env.PORT || 3000;
 
 const pipedriveClientId = process.env.CLIENT_ID;
 const pipedriveClientSecret = process.env.CLIENT_SECRET;
 const redirectUri = process.env.REDIRECT_URI;
 
-// --- Token Storage ---
-// let accessToken = null; // Will be removed
-// let refreshToken = null; // Will be removed
-// let tokenExpiresAt = null; // Will be removed
-// let apiDomain = null; // Will be removed
+// Xero OAuth Configuration
+const xeroClientId = process.env.XERO_CLIENT_ID;
+const xeroClientSecret = process.env.XERO_CLIENT_SECRET;
+const xeroRedirectUri = process.env.XERO_REDIRECT_URI; // Make sure this is in your .env
+
 let allCompanyTokens = {}; // New: Stores tokens for multiple companies { companyId: { accessToken, refreshToken, tokenExpiresAt, apiDomain } }
 const TOKEN_FILE_PATH = path.join(__dirname, 'tokens.json');
+
+// Xero Token Storage
+let allXeroTokens = {}; // { pipedriveCompanyId: { accessToken, refreshToken, tokenExpiresAt, tenantId, scopes } }
+const XERO_TOKEN_FILE_PATH = path.join(__dirname, 'xero_tokens.json');
+let xeroCsrfTokenStore = {}; // Temporary store for CSRF token: { csrfToken: pipedriveCompanyId }
 
 // Function to save all company tokens to a file
 async function saveAllTokensToFile() {
@@ -47,6 +59,35 @@ async function loadAllTokensFromFile() {
         }
     }
 }
+
+// Function to save all Xero tokens to a file
+async function saveAllXeroTokensToFile() {
+    try {
+        const data = JSON.stringify(allXeroTokens, null, 2);
+        await fs.writeFile(XERO_TOKEN_FILE_PATH, data);
+        console.log('All Xero tokens saved to file.');
+    } catch (error) {
+        console.error('Error saving Xero tokens to file:', error);
+    }
+}
+
+// Function to load all Xero tokens from a file
+async function loadAllXeroTokensFromFile() {
+    try {
+        const data = await fs.readFile(XERO_TOKEN_FILE_PATH);
+        allXeroTokens = JSON.parse(data);
+        console.log('All Xero tokens loaded from file.');
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            console.log('Xero token file not found. Proceeding with empty Xero tokens store.');
+            allXeroTokens = {};
+        } else {
+            console.error('Error loading Xero tokens from file:', error);
+            allXeroTokens = {};
+        }
+    }
+}
+
 // --- End Token Storage ---
 
 // In-memory store for the CSRF token (in a real app, use a session store)
@@ -129,6 +170,106 @@ app.get('/callback', async (req, res) => {
     }
 });
 
+// Xero OAuth Routes
+app.get('/connect-xero', (req, res) => {
+    const { pipedriveCompanyId } = req.query; // Pass Pipedrive companyId to link Xero connection
+
+    if (!pipedriveCompanyId) {
+        return res.status(400).send('Pipedrive Company ID is required to connect to Xero.');
+    }
+
+    const csrfToken = crypto.randomBytes(18).toString('hex');
+    // Store the pipedriveCompanyId against the CSRF token to retrieve it in the callback
+    // This is a simple in-memory store; for production, consider a more robust session store
+    xeroCsrfTokenStore[csrfToken] = pipedriveCompanyId; 
+
+    const scopes = [
+        'openid',
+        'profile',
+        'email',
+        'accounting.contacts',
+        'accounting.transactions', // For quotes, invoices
+        'offline_access' // To get a refresh token
+    ].join(' ');
+
+    const authorizationUrl = `https://login.xero.com/identity/connect/authorize?response_type=code&client_id=${xeroClientId}&redirect_uri=${encodeURIComponent(xeroRedirectUri)}&scope=${encodeURIComponent(scopes)}&state=${csrfToken}`;
+    
+    res.redirect(authorizationUrl);
+});
+
+app.get('/xero-callback', async (req, res) => {
+    const { code, state } = req.query;
+
+    const pipedriveCompanyId = xeroCsrfTokenStore[state];
+
+    if (!pipedriveCompanyId) {
+        console.error('CSRF token mismatch or Pipedrive Company ID not found for state:', state);
+        return res.status(403).send('CSRF token mismatch or session expired.');
+    }
+    delete xeroCsrfTokenStore[state]; // Clean up used CSRF token
+
+    if (!code) {
+        return res.status(400).send('Authorization code is missing from Xero callback.');
+    }
+
+    try {
+        const tokenUrl = 'https://identity.xero.com/connect/token';
+        const params = new URLSearchParams();
+        params.append('grant_type', 'authorization_code');
+        params.append('code', code);
+        params.append('redirect_uri', xeroRedirectUri);
+
+        const basicAuth = Buffer.from(`${xeroClientId}:${xeroClientSecret}`).toString('base64');
+
+        const tokenResponse = await axios.post(tokenUrl, params, {
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Authorization': `Basic ${basicAuth}`
+            }
+        });
+
+        const { access_token, refresh_token, expires_in, id_token, scope } = tokenResponse.data;
+
+        // Get Xero Tenant ID(s)
+        const connectionsUrl = 'https://api.xero.com/connections';
+        const connectionsResponse = await axios.get(connectionsUrl, {
+            headers: {
+                'Authorization': `Bearer ${access_token}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (!connectionsResponse.data || connectionsResponse.data.length === 0) {
+            return res.status(500).send('No Xero tenants found for this user. Please ensure you have an active Xero organization.');
+        }
+
+        // Assuming the user connects one Xero org. Take the first one.
+        // In a multi-tenant scenario, you might let the user choose.
+        const tenantId = connectionsResponse.data[0].tenantId; 
+
+        allXeroTokens[pipedriveCompanyId] = {
+            accessToken: access_token,
+            refreshToken: refresh_token,
+            tokenExpiresAt: Date.now() + (expires_in * 1000) - (5 * 60 * 1000), // 5 min buffer
+            tenantId: tenantId,
+            scopes: scope
+        };
+
+        await saveAllXeroTokensToFile();
+
+        console.log(`Xero tokens stored for Pipedrive Company ID ${pipedriveCompanyId}, Xero Tenant ID: ${tenantId}`);
+        // Redirect to a frontend page indicating success
+        res.send(`<h1>Xero Authentication Successful for Pipedrive Company ID: ${pipedriveCompanyId}!</h1><p>Xero Tenant ID: ${tenantId}. You can close this window.</p>`);
+
+    } catch (error) {
+        console.error('Error during Xero OAuth callback:', error.response ? error.response.data : error.message);
+        if (error.response && error.response.data && error.response.data.error_description) {
+            return res.status(500).send(`Error during Xero authentication: ${error.response.data.error_description}`);
+        }
+        res.status(500).send('Error during Xero authentication process.');
+    }
+});
+
 // New endpoint for Pipedrive App Extension
 app.get('/pipedrive-action', async (req, res) => {
     const dealId = req.query.selectedIds; // Pipedrive sends deal ID as selectedIds
@@ -144,7 +285,7 @@ app.get('/pipedrive-action', async (req, res) => {
         return res.status(401).send(`Not authenticated for company ${companyId}. Please ensure this Pipedrive company has authorized the app.`);
     }
 
-    let { accessToken, refreshToken, tokenExpiresAt, apiDomain } = companyTokens;
+    let { accessToken, refreshToken, tokenExpiresAt, apiDomain } = companyTokens; // apiDomain is needed for validation
 
     if (Date.now() >= tokenExpiresAt) {
         try {
@@ -167,26 +308,104 @@ app.get('/pipedrive-action', async (req, res) => {
             allCompanyTokens[companyId].tokenExpiresAt = Date.now() + (refreshResponse.data.expires_in * 1000) - (5 * 60 * 1000);
             
             await saveAllTokensToFile();
-            accessToken = allCompanyTokens[companyId].accessToken;
+            // accessToken = allCompanyTokens[companyId].accessToken; // No longer needed here
+            apiDomain = allCompanyTokens[companyId].apiDomain; // Ensure apiDomain is up-to-date if it could change
 
         } catch (refreshError) {
-            allCompanyTokens[companyId].accessToken = null;
+            allCompanyTokens[companyId].accessToken = null; // Invalidate token on failed refresh
             await saveAllTokensToFile();
+            console.error(`Failed to refresh token for company ${companyId}:`, refreshError.response ? refreshError.response.data : refreshError.message);
             return res.status(401).send(`Failed to refresh token for company ${companyId}. Please have the Pipedrive admin re-authenticate the app for this company.`);
         }
     }
 
+    // Validate that dealId is present if the resource is a deal
     if (!dealId && req.query.resource === 'deal') {
         return res.status(400).send('Deal ID (from selectedIds) is missing for a deal resource.');
-    } else if (!dealId && req.query.resource) {
+    } else if (!dealId && req.query.resource) { // General check if selectedIds is expected but missing
         return res.status(400).send('Required ID (selectedIds) is missing for the resource.');
+    }
+    
+    // Validate apiDomain after potential refresh
+    if (!apiDomain) {
+        return res.status(500).send('API domain configuration missing for your company. Please re-authenticate.');
+    }
+        
+    // Data fetching logic is removed from here.
+    // The sole responsibility is to validate/refresh tokens and redirect.
+
+    const nextJsFrontendUrl = 'http://localhost:3001/pipedrive-data-view';
+    if (dealId && companyId) {
+        return res.redirect(`${nextJsFrontendUrl}?dealId=${dealId}&companyId=${companyId}`);
+    } else if (companyId) { // If only companyId is present (e.g., for a different action type not yet implemented)
+        // Potentially redirect to a different page or handle differently
+        // For now, if dealId is crucial for pipedrive-data-view, this might need adjustment
+        // or the frontend needs to handle missing dealId gracefully.
+        // Assuming for now that dealId is expected by the target page.
+        // If dealId is not present but was expected (e.g. resource was 'deal'), an error would have been sent earlier.
+        // If dealId is simply not part of this specific action, but companyId is,
+        // we might redirect to a more general page or pass only companyId.
+        // For the current flow focused on deals, we ensure dealId is present for the redirect.
+        console.log(`Redirecting for company ${companyId}, but dealId is missing. Ensure this is handled by the frontend or action type.`);
+        return res.redirect(`${nextJsFrontendUrl}?companyId=${companyId}`); // Or handle as an error if dealId is always required
+    } else {
+        // This case should ideally be caught by earlier checks (missing companyId or missing dealId for deal resource)
+        return res.status(400).send('Cannot redirect: Missing critical parameters (dealId or companyId).');
+    }
+});
+
+app.get('/api/pipedrive-data', async (req, res) => {
+    const { dealId, companyId } = req.query;
+
+    if (!dealId || !companyId) {
+        return res.status(400).json({ error: 'Deal ID and Company ID are required.' });
+    }
+
+    const companyTokens = allCompanyTokens[companyId];
+    if (!companyTokens || !companyTokens.accessToken) {
+        return res.status(401).json({ error: `Not authenticated for company ${companyId}. Please ensure this Pipedrive company has authorized the app.` });
+    }
+
+    let { accessToken, refreshToken, tokenExpiresAt, apiDomain } = companyTokens;
+
+    // Token refresh logic
+    if (Date.now() >= tokenExpiresAt) {
+        try {
+            const tokenUrl = 'https://oauth.pipedrive.com/oauth/token';
+            const params = new URLSearchParams();
+            params.append('grant_type', 'refresh_token');
+            params.append('refresh_token', refreshToken);
+
+            const refreshResponse = await axios.post(tokenUrl, params, {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Authorization': `Basic ${Buffer.from(`${pipedriveClientId}:${pipedriveClientSecret}`).toString('base64')}`
+                }
+            });
+
+            allCompanyTokens[companyId].accessToken = refreshResponse.data.access_token;
+            if (refreshResponse.data.refresh_token) {
+                allCompanyTokens[companyId].refreshToken = refreshResponse.data.refresh_token;
+            }
+            allCompanyTokens[companyId].tokenExpiresAt = Date.now() + (refreshResponse.data.expires_in * 1000) - (5 * 60 * 1000);
+            
+            await saveAllTokensToFile();
+            accessToken = allCompanyTokens[companyId].accessToken; // Update local accessToken for this request
+            // apiDomain is not expected to change on refresh, but ensure it's correctly scoped if it could
+            apiDomain = allCompanyTokens[companyId].apiDomain;
+            
+        } catch (refreshError) {
+            allCompanyTokens[companyId].accessToken = null;
+            await saveAllTokensToFile();
+            return res.status(401).json({ error: `Failed to refresh token for company ${companyId}. Please re-authenticate.` });
+        }
+    }
+    
+    if (!apiDomain) {
+        return res.status(500).json({ error: 'API domain configuration missing for your company. Please re-authenticate.' });
     }
 
     try {
-        if (!apiDomain) {
-            return res.status(500).send('API domain configuration missing for your company. Please re-authenticate.');
-        }
-        
         let dealDetails = null;
         let personDetails = null;
         let organizationDetails = null;
@@ -200,7 +419,7 @@ app.get('/pipedrive-action', async (req, res) => {
         dealDetails = dealResponse.data.data;
 
         if (!dealDetails) {
-            return res.status(404).send(`Deal with ID ${dealId} not found for company ${companyId}.`);
+            return res.status(404).json({ error: `Deal with ID ${dealId} not found for company ${companyId}.` });
         }
 
         // 2. Fetch Person (Contact) Details if person_id exists
@@ -229,27 +448,40 @@ app.get('/pipedrive-action', async (req, res) => {
             headers: { 'Authorization': `Bearer ${accessToken}` }
         });
         dealProducts = productsResponse.data.data;
-
-        res.status(200).send(`Successfully fetched deal, contact, organization, and product data for Deal ID: ${dealId} (Company: ${companyId}).`);
+        
+        // Send all fetched data as JSON
+        res.status(200).json({
+            dealDetails,
+            personDetails,
+            organizationDetails,
+            dealProducts
+        });
 
     } catch (apiError) {
         const status = apiError.response ? apiError.response.status : 500;
-        const message = apiError.response && apiError.response.data && apiError.response.data.error 
+        const errorMessage = apiError.response && apiError.response.data && apiError.response.data.error 
                         ? apiError.response.data.error 
-                        : `Error processing Pipedrive data for company ${companyId}.`;
+                        : `Error fetching Pipedrive data for company ${companyId}.`;
         
         if (status === 404) {
-            return res.status(404).send(`A required resource (deal, person, organization, or products) was not found for Deal ID ${dealId}, Company ${companyId}.`);
+            return res.status(404).json({ error: `A required resource (deal, person, organization, or products) was not found for Deal ID ${dealId}, Company ${companyId}.` });
         } else if (status === 401 || status === 403) {
-            return res.status(status).send('Pipedrive API authentication/authorization error. Please check token and permissions.');
+            return res.status(status).json({ error: 'Pipedrive API authentication/authorization error. Please check token and permissions.'});
         }
-        res.status(status).send(message);
+        res.status(status).json({ error: errorMessage });
     }
 });
 
 // Load tokens at startup and then start the server
-loadAllTokensFromFile().then(() => { // Changed to loadAllTokensFromFile
+Promise.all([loadAllTokensFromFile(), loadAllXeroTokensFromFile()]).then(() => {
     app.listen(port, () => {
         console.log(`Server running on http://localhost:${port}`);
+    });
+}).catch(error => {
+    console.error("Failed to load token files at startup:", error);
+    // Decide if you want to start the server anyway or exit
+    // For now, let's log and attempt to start.
+    app.listen(port, () => {
+        console.log(`Server running on http://localhost:${port}, but there was an error loading token files.`);
     });
 });
