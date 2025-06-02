@@ -7,6 +7,7 @@ import { loadAllTokensFromFile, loadAllXeroTokensFromFile } from './services/tok
 import authRoutes from './routes/authRoutes.js'; // Added .js
 import pipedriveRoutes from './routes/pipedriveRoutes.js'; // Added .js
 import xeroRoutes from './routes/xeroRoutes.js'; // Added .js
+import projectRoutes from './routes/projectRoutes.js'; // Added .js
 
 const app = express();
 
@@ -22,6 +23,7 @@ const port = process.env.PORT || 3000;
 app.use('/', authRoutes); // Mount auth routes at the root
 app.use('/', pipedriveRoutes); // Mount Pipedrive routes (includes /pipedrive-action and /api/pipedrive-data)
 app.use('/', xeroRoutes); // Mount Xero routes (includes /api/xero/status and /api/xero/create-quote)
+app.use('/', projectRoutes); // Mount project routes (includes /api/project/create-full)
 
 
 // --- Start Server and Load Tokens ---

@@ -92,6 +92,7 @@ export const initiateXeroAuth = (req, res) => {
         'email',
         'accounting.contacts',
         'accounting.transactions',
+        'projects',
         'offline_access'
     ].join(' ');
 

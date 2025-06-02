@@ -111,3 +111,39 @@ export const updateDealWithQuoteNumber = async (apiDomain, accessToken, dealId, 
     throw error; // Re-throw to be handled by the controller
   }
 };
+
+export const updateDealWithProjectNumber = async (apiDomain, accessToken, dealId, projectNumber) => {
+  if (!accessToken) {
+    throw new Error('Pipedrive access token not provided.');
+  }
+  if (!apiDomain) {
+    throw new Error('Pipedrive API domain not provided.');
+  }
+
+  const projectNumberCustomFieldKey = process.env.PIPEDRIVE_PROJECT_NUMBER_CUSTOM_FIELD_KEY;
+
+  if (!projectNumberCustomFieldKey) {
+    console.error('PIPEDRIVE_PROJECT_NUMBER_CUSTOM_FIELD_KEY is not set in .env. Skipping deal update.');
+    throw new Error('PIPEDRIVE_PROJECT_NUMBER_CUSTOM_FIELD_KEY is not configured.'); 
+  }
+
+  try {
+    const response = await axios.put(
+      `${apiDomain}/v1/deals/${dealId}`,
+      { [projectNumberCustomFieldKey]: projectNumber },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+    console.log(`Pipedrive deal ${dealId} updated successfully with project number ${projectNumber}:`, response.data);
+    return response.data;
+  } catch (error) {
+    console.error(
+      'Error updating Pipedrive deal with project number:',
+      error.response ? JSON.stringify(error.response.data, null, 2) : error.message
+    );
+    throw error; // Re-throw to be handled by the controller
+  }
+};
