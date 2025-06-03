@@ -15,9 +15,40 @@ import databaseRoutes from './routes/databaseRoutes.js'; // Database administrat
 const app = express();
 
 // Enable CORS - configure appropriately for production
-app.use(cors({
-    origin: 'http://localhost:3001' // Allow requests from your Next.js app's origin
-}));
+const corsOptions = {
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        
+        const allowedOrigins = [
+            process.env.FRONTEND_BASE_URL || 'http://localhost:3001',
+            'http://localhost:3001', // Next.js dev server
+            'http://localhost:3000', // This server
+        ];
+        
+        // In development, be more permissive for Next.js internal requests
+        if (process.env.NODE_ENV !== 'production') {
+            if (origin.includes('localhost')) {
+                return callback(null, true);
+            }
+        }
+        
+        if (allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true, // Allow cookies and credentials
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'], // Allow all common HTTP methods
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'], // Allow common headers
+    optionsSuccessStatus: 200 // Some legacy browsers (IE11, various SmartTVs) choke on 204
+};
+
+app.use(cors(corsOptions));
+
+// Handle preflight requests explicitly
+app.options('*', cors(corsOptions));
 
 // Add HTTP logging middleware (must be before other middleware)
 app.use(httpLogger);
@@ -113,7 +144,7 @@ app.post('/api/test-redaction', (req, res) => {
 });
 
 // Use the imported routes
-app.use('/', authRoutes); // Mount auth routes at the root
+app.use('/auth', authRoutes); // Mount auth routes under /auth prefix
 app.use('/', pipedriveRoutes); // Mount Pipedrive routes (includes /pipedrive-action and /api/pipedrive-data)
 app.use('/', xeroRoutes); // Mount Xero routes (includes /api/xero/status and /api/xero/create-quote)
 app.use('/', projectRoutes); // Mount project routes (includes /api/project/create-full)
@@ -130,7 +161,7 @@ async function startServer() {
     await loadAllXeroTokensFromFile(); // Load Xero tokens
     
     app.listen(port, () => {
-        logger.info(`Server is running on http://localhost:${port}`, {
+        logger.info(`Server is running on http://localhost:${port}/auth`, {
             port,
             environment: process.env.NODE_ENV || 'development',
             nodeVersion: process.version

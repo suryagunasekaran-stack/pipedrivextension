@@ -22,18 +22,17 @@ import {
 
 /**
  * Creates a comprehensive project by orchestrating all project creation steps.
- * This is the main controller function that coordinates helper functions
- * to handle validation, project number generation, Xero integration, and data aggregation.
+ * This function now uses authentication from middleware instead of handling it internally.
  * 
- * @param {Object} req - Express request object with body containing dealId, companyId, and optional existingProjectNumberToLink
+ * @param {Object} req - Express request object with body containing pipedriveDealId, pipedriveCompanyId, and optional existingProjectNumberToLink
  * @param {Object} res - Express response object
  * @returns {Promise<void>} Returns JSON with complete project data including Xero integration status
- * @throws {Error} Returns 400 for validation errors, 401 for auth issues, 404 for missing deals, 500 for system errors
+ * @throws {Error} Returns 400 for validation errors, 404 for missing deals, 500 for system errors
  */
 export const createFullProject = asyncHandler(async (req, res) => {
     req.log.info('Starting full project creation', {
-        dealId: req.body.dealId,
-        companyId: req.body.companyId,
+        pipedriveDealId: req.body.pipedriveDealId,
+        pipedriveCompanyId: req.body.pipedriveCompanyId,
         existingProjectNumberToLink: req.body.existingProjectNumberToLink,
         userAgent: req.get('User-Agent')
     });
@@ -42,8 +41,8 @@ export const createFullProject = asyncHandler(async (req, res) => {
         // Step 1: Validate request parameters
         const { dealId, companyId, existingProjectNumberToLink } = validateProjectCreationRequest(req.body, req);
 
-        // Step 2: Validate and refresh Pipedrive tokens
-        const { accessToken, apiDomain } = await validateAndRefreshPipedriveTokens(companyId, req);
+        // Step 2: Use authentication from middleware (req.pipedriveAuth is set by middleware)
+        const { accessToken, apiDomain } = req.pipedriveAuth;
 
         // Step 3: Fetch and validate deal details
         const { dealDetails, departmentName } = await fetchAndValidateDeal(apiDomain, accessToken, dealId, req);
@@ -111,8 +110,8 @@ export const createFullProject = asyncHandler(async (req, res) => {
         const statusCode = error.statusCode || 500;
         const errorResponse = {
             error: error.message,
-            dealId: req.body.dealId,
-            companyId: req.body.companyId,
+            pipedriveDealId: req.body.pipedriveDealId,
+            pipedriveCompanyId: req.body.pipedriveCompanyId,
             requestId: req.id
         };
 
@@ -125,8 +124,8 @@ export const createFullProject = asyncHandler(async (req, res) => {
         }
 
         req.log.error(error, {
-            dealId: req.body.dealId,
-            companyId: req.body.companyId,
+            pipedriveDealId: req.body.pipedriveDealId,
+            pipedriveCompanyId: req.body.pipedriveCompanyId,
             statusCode,
             errorName: error.name,
             errorMessage: error.message

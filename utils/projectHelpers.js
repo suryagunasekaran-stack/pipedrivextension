@@ -69,19 +69,23 @@ export async function validateAndRefreshPipedriveTokens(companyId, req) {
  * @throws {Error} Throws error with status code 400 for validation failures
  */
 export function validateProjectCreationRequest(requestBody, req) {
-    const { dealId, companyId, existingProjectNumberToLink } = requestBody;
+    const { pipedriveDealId, pipedriveCompanyId, existingProjectNumberToLink } = requestBody;
 
-    if (!dealId || !companyId) {
+    if (!pipedriveDealId || !pipedriveCompanyId) {
         req.log.warn('Missing required parameters for project creation', {
-            dealId: !!dealId,
-            companyId: !!companyId
+            pipedriveDealId: !!pipedriveDealId,
+            pipedriveCompanyId: !!pipedriveCompanyId
         });
         const error = new Error('Deal ID and Company ID are required in the request body.');
         error.statusCode = 400;
         throw error;
     }
 
-    return { dealId, companyId, existingProjectNumberToLink };
+    return { 
+        dealId: pipedriveDealId, 
+        companyId: pipedriveCompanyId, 
+        existingProjectNumberToLink 
+    };
 }
 
 /**

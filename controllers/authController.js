@@ -16,13 +16,21 @@ const redirectUri = process.env.REDIRECT_URI;
 const xeroClientId = process.env.XERO_CLIENT_ID;
 const xeroRedirectUri = process.env.XERO_REDIRECT_URI;
 
+// Frontend URLs for redirects
+const frontendBaseUrl = process.env.FRONTEND_BASE_URL || 'http://localhost:3000';
+const pipedriveAuthPageUrl = `${frontendBaseUrl}/auth/pipedrive`;
+const pipedriveSuccessPageUrl = `${frontendBaseUrl}/auth/pipedrive/success`;
+const pipedriveErrorPageUrl = `${frontendBaseUrl}/auth/pipedrive/error`;
+const xeroSuccessPageUrl = `${frontendBaseUrl}/auth/xero/success`;
+const xeroErrorPageUrl = `${frontendBaseUrl}/auth/xero/error`;
+
 /**
  * Initiates the Pipedrive OAuth authorization flow by generating a CSRF token
- * and redirecting the user to Pipedrive's authorization URL.
+ * and redirecting the user to the frontend auth page with the authorization URL.
  * 
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
- * @returns {void} Sends HTML response with authorization link
+ * @returns {void} Redirects to frontend auth page with authorization URL
  */
 export const initiatePipedriveAuth = (req, res) => {
     req.log.info('Initiating Pipedrive OAuth flow', {
@@ -46,7 +54,9 @@ export const initiatePipedriveAuth = (req, res) => {
         redirectUri
     });
     
-    res.send(`<h1>Pipedrive OAuth Example</h1><a href="${authorizationUrl}">Connect to Pipedrive</a>`);
+    // Redirect to frontend auth page with the authorization URL
+    const frontendAuthUrl = `${pipedriveAuthPageUrl}?authUrl=${encodeURIComponent(authorizationUrl)}`;
+    res.redirect(frontendAuthUrl);
 };
 
 /**
@@ -56,8 +66,8 @@ export const initiatePipedriveAuth = (req, res) => {
  * 
  * @param {Object} req - Express request object with query parameters (code, state)
  * @param {Object} res - Express response object
- * @returns {Promise<void>} Sends success or error response
- * @throws {Error} Returns 403 for CSRF mismatch, 400 for missing code, 500 for API errors
+ * @returns {Promise<void>} Redirects to frontend success or error page
+ * @throws {Error} Redirects to error page for CSRF mismatch, missing code, or API errors
  */
 export const handlePipedriveCallback = async (req, res) => {
     const { code, state } = req.query;
@@ -74,12 +84,12 @@ export const handlePipedriveCallback = async (req, res) => {
             receivedState: state,
             expectedState: storedCsrfToken
         });
-        return res.status(403).send('CSRF token mismatch');
+        return res.redirect(`${pipedriveErrorPageUrl}?error=${encodeURIComponent('CSRF token mismatch')}`);
     }
 
     if (!code) {
         req.log.error('No authorization code received in Pipedrive callback');
-        return res.status(400).send('Authorization code is missing');
+        return res.redirect(`${pipedriveErrorPageUrl}?error=${encodeURIComponent('Authorization code is missing')}`);
     }
 
     try {
@@ -110,11 +120,21 @@ export const handlePipedriveCallback = async (req, res) => {
 
         await tokenService.saveAllTokensToFile();
 
-        res.send(`<h1>Authentication Successful for Company ID: ${companyIdForTokenStorage}!</h1><p>Tokens stored. You can now use the app action.</p>`);
+        req.log.info('Pipedrive authentication successful', {
+            companyId: companyIdForTokenStorage,
+            apiDomain: api_domain
+        });
+
+        // Redirect to Pipedrive after successful authentication
+        res.redirect('https://www.pipedrive.com');
 
     } catch (error) {
-        console.error('Error during Pipedrive OAuth callback:', error.response ? error.response.data : error.message);
-        res.status(500).send('Error during Pipedrive authentication process.');
+        req.log.error('Error during Pipedrive OAuth callback', {
+            error: error.response ? error.response.data : error.message
+        });
+        
+        const errorMessage = error.response?.data?.error_description || error.message || 'Authentication failed';
+        res.redirect(`${pipedriveErrorPageUrl}?error=${encodeURIComponent(errorMessage)}`);
     }
 };
 
@@ -159,23 +179,30 @@ export const initiateXeroAuth = (req, res) => {
  * 
  * @param {Object} req - Express request object with query parameters (code, state)
  * @param {Object} res - Express response object
- * @returns {Promise<void>} Sends success or error response
- * @throws {Error} Returns 403 for CSRF mismatch, 400 for missing code, 500 for API errors
+ * @returns {Promise<void>} Redirects to frontend success or error page
+ * @throws {Error} Redirects to error page for CSRF mismatch, missing code, or API errors
  */
 export const handleXeroCallback = async (req, res) => {
     const { code, state } = req.query;
     let xeroCsrfStore = tokenService.getXeroCsrfTokenStore();
     const pipedriveCompanyId = xeroCsrfStore[state];
 
+    req.log.info('Handling Xero OAuth callback', {
+        hasCode: !!code,
+        hasState: !!state,
+        pipedriveCompanyId: pipedriveCompanyId
+    });
+
     if (!pipedriveCompanyId) {
-        console.error('CSRF token mismatch or Pipedrive Company ID not found for state:', state);
-        return res.status(403).send('CSRF token mismatch or session expired.');
+        req.log.error('CSRF token mismatch or Pipedrive Company ID not found for state:', state);
+        return res.redirect(`${xeroErrorPageUrl}?error=${encodeURIComponent('CSRF token mismatch or session expired')}`);
     }
     delete xeroCsrfStore[state];
     tokenService.setXeroCsrfTokenStore(xeroCsrfStore);
 
     if (!code) {
-        return res.status(400).send('Authorization code is missing from Xero callback.');
+        req.log.error('No authorization code received in Xero callback');
+        return res.redirect(`${xeroErrorPageUrl}?error=${encodeURIComponent('Authorization code is missing from Xero callback')}`);
     }
 
     try {
@@ -209,13 +236,171 @@ export const handleXeroCallback = async (req, res) => {
 
         await tokenService.saveAllXeroTokensToFile();
 
-        res.send(`<h1>Xero Authentication Successful for Pipedrive Company ID: ${pipedriveCompanyId}!</h1><p>Xero Tenant ID: ${tenantId}. You can close this window.</p>`);
+        req.log.info('Xero authentication successful', {
+            pipedriveCompanyId: pipedriveCompanyId,
+            tenantId: tenantId
+        });
+
+        // Redirect to success page with company and tenant info
+        const successUrl = `${xeroSuccessPageUrl}?companyId=${encodeURIComponent(pipedriveCompanyId)}&tenantId=${encodeURIComponent(tenantId)}`;
+        res.redirect(successUrl);
 
     } catch (error) {
-        console.error('Error during Xero OAuth callback:', error.response ? error.response.data : error.message);
-        if (error.response && error.response.data && error.response.data.error_description) {
-            return res.status(500).send(`Error during Xero authentication: ${error.response.data.error_description}`);
+        req.log.error('Error during Xero OAuth callback', {
+            pipedriveCompanyId: pipedriveCompanyId,
+            error: error.response ? error.response.data : error.message
+        });
+        
+        const errorMessage = error.response?.data?.error_description || error.message || 'Xero authentication failed';
+        res.redirect(`${xeroErrorPageUrl}?error=${encodeURIComponent(errorMessage)}&companyId=${encodeURIComponent(pipedriveCompanyId || '')}`);
+    }
+};
+
+/**
+ * Gets the Pipedrive authorization URL without redirecting.
+ * Useful for frontend to get the auth URL via API call.
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @returns {void} Returns JSON with authorization URL
+ */
+export const getPipedriveAuthUrl = (req, res) => {
+    req.log.info('Generating Pipedrive OAuth URL for frontend', {
+        userAgent: req.get('User-Agent')
+    });
+
+    const csrfToken = crypto.randomBytes(18).toString('hex');
+    tokenService.setCsrfTokenStore(csrfToken);
+
+    const scopes = [
+        'deals:full',
+        'users:read'
+    ].join(' ');
+
+    const authorizationUrl = `https://oauth.pipedrive.com/oauth/authorize?client_id=${pipedriveClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${csrfToken}&scope=${encodeURIComponent(scopes)}`;
+    
+    req.log.info('Pipedrive OAuth URL generated for API response', {
+        csrfToken,
+        scopes: scopes.split(' ')
+    });
+    
+    res.json({
+        success: true,
+        authUrl: authorizationUrl,
+        csrfToken: csrfToken,
+        scopes: scopes.split(' ')
+    });
+};
+
+/**
+ * Checks the authentication status for a specific company.
+ * Returns information about Pipedrive and Xero authentication status.
+ * 
+ * @param {Object} req - Express request object with query parameter companyId
+ * @param {Object} res - Express response object
+ * @returns {void} Returns JSON with authentication status
+ */
+export const checkAuthStatus = (req, res) => {
+    // Support companyId from query or request body for POST and GET
+    const companyId = req.query.companyId || req.body.companyId;
+
+    if (!companyId) {
+        return res.status(400).json({
+            success: false,
+            error: 'Company ID is required',
+            message: 'Please provide companyId as a query parameter (?companyId=123) or in the request body',
+            example: {
+                queryParameter: '/auth/check-auth?companyId=123',
+                requestBody: '{ "companyId": "123" }'
+            }
+        });
+    }
+
+    const pipedriveTokens = tokenService.allCompanyTokens[companyId];
+    const xeroTokens = tokenService.allXeroTokens[companyId];
+
+    const currentTime = Date.now();
+
+    const authStatus = {
+        companyId: companyId,
+        pipedrive: {
+            authenticated: !!(pipedriveTokens && pipedriveTokens.accessToken),
+            tokenExpired: pipedriveTokens ? currentTime >= pipedriveTokens.tokenExpiresAt : true,
+            apiDomain: pipedriveTokens?.apiDomain || null
+        },
+        xero: {
+            authenticated: !!(xeroTokens && xeroTokens.accessToken),
+            tokenExpired: xeroTokens ? currentTime >= xeroTokens.tokenExpiresAt : true,
+            tenantId: xeroTokens?.tenantId || null
         }
-        res.status(500).send('Error during Xero authentication process.');
+    };
+
+    // Check if tokens need refresh
+    authStatus.pipedrive.needsRefresh = authStatus.pipedrive.authenticated && authStatus.pipedrive.tokenExpired;
+    authStatus.xero.needsRefresh = authStatus.xero.authenticated && authStatus.xero.tokenExpired;
+
+    req.log.info('Auth status checked', {
+        companyId,
+        pipedriveAuth: authStatus.pipedrive.authenticated,
+        xeroAuth: authStatus.xero.authenticated,
+        pipedriveExpired: authStatus.pipedrive.tokenExpired,
+        xeroExpired: authStatus.xero.tokenExpired
+    });
+
+    res.json({
+        success: true,
+        data: authStatus
+    });
+};
+
+/**
+ * Initiates logout by clearing tokens for a specific company.
+ * 
+ * @param {Object} req - Express request object with body parameter companyId
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Returns JSON success response
+ */
+export const logout = async (req, res) => {
+    const { companyId } = req.body;
+
+    if (!companyId) {
+        return res.status(400).json({
+            success: false,
+            error: 'Company ID is required'
+        });
+    }
+
+    try {
+        // Clear tokens
+        if (tokenService.allCompanyTokens[companyId]) {
+            delete tokenService.allCompanyTokens[companyId];
+        }
+        if (tokenService.allXeroTokens[companyId]) {
+            delete tokenService.allXeroTokens[companyId];
+        }
+
+        // Save updated token files
+        await tokenService.saveAllTokensToFile();
+        await tokenService.saveAllXeroTokensToFile();
+
+        req.log.info('User logged out successfully', {
+            companyId
+        });
+
+        res.json({
+            success: true,
+            message: 'Logged out successfully'
+        });
+
+    } catch (error) {
+        req.log.error('Error during logout', {
+            companyId,
+            error: error.message
+        });
+
+        res.status(500).json({
+            success: false,
+            error: 'Failed to logout'
+        });
     }
 };

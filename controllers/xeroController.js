@@ -56,15 +56,24 @@ export const createXeroQuote = async (req, res) => {
     }
 
     try {
-        let pdCompanyTokens = tokenService.allCompanyTokens[pipedriveCompanyId];
-        if (!pdCompanyTokens || !pdCompanyTokens.accessToken) {
-            return res.status(401).json({ error: `Pipedrive not authenticated for company ${pipedriveCompanyId}.` });
+        // Use auth info provided by middleware
+        const pdApiDomain = req.pipedriveAuth.apiDomain;
+        const pdAccessToken = req.pipedriveAuth.accessToken;
+
+        // Check if Xero auth is available (middleware provides this info)
+        if (!req.xeroAuth || !req.xeroAuth.accessToken) {
+            return res.status(401).json({ 
+                success: false,
+                error: `Xero not authenticated for Pipedrive company ${pipedriveCompanyId}. Please connect to Xero first.`,
+                authRequired: true,
+                authType: 'xero',
+                companyId: pipedriveCompanyId,
+                authUrl: `http://localhost:3000/auth/connect-xero?pipedriveCompanyId=${pipedriveCompanyId}`
+            });
         }
-        if (Date.now() >= pdCompanyTokens.tokenExpiresAt) {
-            pdCompanyTokens = await tokenService.refreshPipedriveToken(pipedriveCompanyId);
-        }
-        const pdApiDomain = pdCompanyTokens.apiDomain;
-        const pdAccessToken = pdCompanyTokens.accessToken;
+
+        const xeroAccessToken = req.xeroAuth.accessToken;
+        const xeroTenantId = req.xeroAuth.tenantId;
 
         const dealDetails = await pipedriveApiService.getDealDetails(pdApiDomain, pdAccessToken, pipedriveDealId);
         if (!dealDetails) return res.status(404).json({ error: `Pipedrive Deal ${pipedriveDealId} not found.` });
@@ -91,16 +100,7 @@ export const createXeroQuote = async (req, res) => {
              return res.status(400).json({ error: 'Pipedrive organization has no name, which is required for Xero contact.' });
         }
 
-        let xeroTokenInfo = tokenService.allXeroTokens[pipedriveCompanyId];
-        if (!xeroTokenInfo || !xeroTokenInfo.accessToken || !xeroTokenInfo.tenantId) {
-            return res.status(401).json({ error: `Xero not authenticated for Pipedrive company ${pipedriveCompanyId}. Please connect to Xero first.` });
-        }
-
-        if (Date.now() >= xeroTokenInfo.tokenExpiresAt) {
-            xeroTokenInfo = await tokenService.refreshXeroToken(pipedriveCompanyId);
-        }
-        const xeroAccessToken = xeroTokenInfo.accessToken;
-        const xeroTenantId = xeroTokenInfo.tenantId;
+        // Xero auth info is already available from middleware
 
         let xeroContactID;
         let existingXeroContact = await xeroApiService.findXeroContactByName(xeroAccessToken, xeroTenantId, contactName);
@@ -216,16 +216,20 @@ export const acceptXeroQuote = async (req, res) => {
     }
 
     try {
-        let xeroTokenInfo = tokenService.allXeroTokens[pipedriveCompanyId];
-        if (!xeroTokenInfo || !xeroTokenInfo.accessToken || !xeroTokenInfo.tenantId) {
-            return res.status(401).json({ error: `Xero not authenticated for Pipedrive company ${pipedriveCompanyId}. Please connect to Xero first.` });
+        // Use auth info provided by middleware
+        if (!req.xeroAuth || !req.xeroAuth.accessToken) {
+            return res.status(401).json({ 
+                success: false,
+                error: `Xero not authenticated for Pipedrive company ${pipedriveCompanyId}. Please connect to Xero first.`,
+                authRequired: true,
+                authType: 'xero',
+                companyId: pipedriveCompanyId,
+                authUrl: `http://localhost:3000/auth/connect-xero?pipedriveCompanyId=${pipedriveCompanyId}`
+            });
         }
 
-        if (Date.now() >= xeroTokenInfo.tokenExpiresAt) {
-            xeroTokenInfo = await tokenService.refreshXeroToken(pipedriveCompanyId);
-        }
-        const xeroAccessToken = xeroTokenInfo.accessToken;
-        const xeroTenantId = xeroTokenInfo.tenantId;
+        const xeroAccessToken = req.xeroAuth.accessToken;
+        const xeroTenantId = req.xeroAuth.tenantId;
 
         const acceptanceResult = await xeroApiService.updateQuoteStatus(xeroAccessToken, xeroTenantId, quoteId, 'ACCEPTED');
 
@@ -270,18 +274,20 @@ export const createXeroProject = async (req, res) => {
     }
 
     try {
-        let xeroTokenInfo = tokenService.allXeroTokens[pipedriveCompanyId];
-        
-        if (!xeroTokenInfo || !xeroTokenInfo.accessToken || !xeroTokenInfo.tenantId) {
-            return res.status(401).json({ error: `Xero not authenticated for Pipedrive company ${pipedriveCompanyId}. Please connect to Xero first.` });
+        // Use auth info provided by middleware
+        if (!req.xeroAuth || !req.xeroAuth.accessToken) {
+            return res.status(401).json({ 
+                success: false,
+                error: `Xero not authenticated for Pipedrive company ${pipedriveCompanyId}. Please connect to Xero first.`,
+                authRequired: true,
+                authType: 'xero',
+                companyId: pipedriveCompanyId,
+                authUrl: `http://localhost:3000/auth/connect-xero?pipedriveCompanyId=${pipedriveCompanyId}`
+            });
         }
-
-        if (Date.now() >= xeroTokenInfo.tokenExpiresAt) {
-            xeroTokenInfo = await tokenService.refreshXeroToken(pipedriveCompanyId);
-        }
         
-        const xeroAccessToken = xeroTokenInfo.accessToken;
-        const xeroTenantId = xeroTokenInfo.tenantId;
+        const xeroAccessToken = req.xeroAuth.accessToken;
+        const xeroTenantId = req.xeroAuth.tenantId;
 
         const projectData = {
             contactId: contactId,
@@ -295,15 +301,24 @@ export const createXeroProject = async (req, res) => {
         // Update Pipedrive deal with project information if dealId is provided
         if (newProject && dealId && pipedriveCompanyId) {
             try {
-                let pdCompanyTokens = tokenService.allCompanyTokens[pipedriveCompanyId];
-                if (pdCompanyTokens && pdCompanyTokens.accessToken) {
-                    if (Date.now() >= pdCompanyTokens.tokenExpiresAt) {
-                        pdCompanyTokens = await tokenService.refreshPipedriveToken(pipedriveCompanyId);
+                // Use Pipedrive auth from middleware if available, otherwise fall back to token service
+                let pdApiDomain, pdAccessToken;
+                
+                if (req.pipedriveAuth && req.pipedriveAuth.accessToken) {
+                    pdApiDomain = req.pipedriveAuth.apiDomain;
+                    pdAccessToken = req.pipedriveAuth.accessToken;
+                } else {
+                    let pdCompanyTokens = tokenService.allCompanyTokens[pipedriveCompanyId];
+                    if (pdCompanyTokens && pdCompanyTokens.accessToken) {
+                        if (Date.now() >= pdCompanyTokens.tokenExpiresAt) {
+                            pdCompanyTokens = await tokenService.refreshPipedriveToken(pipedriveCompanyId);
+                        }
+                        pdApiDomain = pdCompanyTokens.apiDomain;
+                        pdAccessToken = pdCompanyTokens.accessToken;
                     }
-                    
-                    const pdApiDomain = pdCompanyTokens.apiDomain;
-                    const pdAccessToken = pdCompanyTokens.accessToken;
-                    
+                }
+                
+                if (pdApiDomain && pdAccessToken) {
                     const projectIdentifier = newProject.projectId || newProject.id || newProject.projectNumber || `Project: ${name}`;
                     
                     await pipedriveApiService.updateDealWithProjectNumber(pdApiDomain, pdAccessToken, dealId, projectIdentifier);

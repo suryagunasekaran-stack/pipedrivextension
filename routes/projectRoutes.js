@@ -6,17 +6,19 @@
  * provides endpoints for complex project operations that span multiple services.
  * 
  * Routes:
- * - POST /api/project/create-full - Create complete project with deal linking
+ * - POST /api/project/create-full - Create complete project with deal linking (requires Pipedrive auth)
  * 
  * @module routes/projectRoutes
  */
 
 import express from 'express';
 import { createFullProject } from '../controllers/projectController.js';
+import { requirePipedriveWithOptionalXero } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
 // Route for creating a full project with deal linking and project number generation
-router.post('/api/project/create-full', createFullProject);
+// Requires Pipedrive authentication, Xero is optional
+router.post('/api/project/create-full', requirePipedriveWithOptionalXero, createFullProject);
 
 export default router;
