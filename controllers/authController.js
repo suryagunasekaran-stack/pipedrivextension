@@ -11,6 +11,11 @@ const xeroClientId = process.env.XERO_CLIENT_ID;
 const xeroRedirectUri = process.env.XERO_REDIRECT_URI;
 
 export const initiatePipedriveAuth = (req, res) => {
+    req.log.info('Initiating Pipedrive OAuth flow', {
+        userAgent: req.get('User-Agent'),
+        remoteAddress: req.ip
+    });
+
     const csrfToken = crypto.randomBytes(18).toString('hex');
     tokenService.setCsrfTokenStore(csrfToken); // Store CSRF token
 
@@ -22,6 +27,13 @@ export const initiatePipedriveAuth = (req, res) => {
     ].join(' ');
 
     const authorizationUrl = `https://oauth.pipedrive.com/oauth/authorize?client_id=${pipedriveClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${csrfToken}&scope=${encodeURIComponent(scopes)}`;
+    
+    req.log.info('Pipedrive OAuth URL generated', {
+        csrfToken,
+        scopes: scopes.split(' '),
+        redirectUri
+    });
+    
     res.send(`<h1>Pipedrive OAuth Example</h1><a href="${authorizationUrl}">Connect to Pipedrive</a>`);
 };
 
@@ -29,11 +41,22 @@ export const handlePipedriveCallback = async (req, res) => {
     const { code, state } = req.query;
     const storedCsrfToken = tokenService.getCsrfTokenStore();
 
+    req.log.info('Handling Pipedrive OAuth callback', {
+        hasCode: !!code,
+        hasState: !!state,
+        stateMatches: state === storedCsrfToken
+    });
+
     if (state !== storedCsrfToken) {
+        req.log.warn('CSRF token mismatch in Pipedrive callback', {
+            receivedState: state,
+            expectedState: storedCsrfToken
+        });
         return res.status(403).send('CSRF token mismatch');
     }
 
     if (!code) {
+        req.log.error('No authorization code received in Pipedrive callback');
         return res.status(400).send('Authorization code is missing');
     }
 

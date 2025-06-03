@@ -3,33 +3,55 @@ import * as tokenService from '../services/tokenService.js';
 import * as pipedriveApiService from '../services/pipedriveApiService.js';
 import * as xeroApiService from '../services/xeroApiService.js';
 import { getNextProjectNumber } from '../models/projectSequenceModel.js';
+import { asyncHandler } from '../middleware/errorHandler.js';
 
-export const createFullProject = async (req, res) => {
+export const createFullProject = asyncHandler(async (req, res) => {
     const { dealId, companyId, existingProjectNumberToLink } = req.body;
+
+    req.log.info('Starting full project creation', {
+        dealId,
+        companyId,
+        existingProjectNumberToLink,
+        userAgent: req.get('User-Agent')
+    });
 
     // Validate required parameters
     if (!dealId || !companyId) {
+        req.log.warn('Missing required parameters for project creation', {
+            dealId: !!dealId,
+            companyId: !!companyId
+        });
         return res.status(400).json({ 
-            error: 'Deal ID and Company ID are required in the request body.' 
+            error: 'Deal ID and Company ID are required in the request body.',
+            requestId: req.id
         });
     }
 
     // Get and validate Pipedrive tokens
     let companyTokens = tokenService.allCompanyTokens[companyId];
     if (!companyTokens || !companyTokens.accessToken) {
+        req.log.error('Pipedrive not authenticated for company', {
+            companyId,
+            hasTokens: !!companyTokens,
+            hasAccessToken: !!(companyTokens?.accessToken)
+        });
         return res.status(401).json({ 
-            error: `Pipedrive not authenticated for company ${companyId}.` 
+            error: `Pipedrive not authenticated for company ${companyId}.`,
+            requestId: req.id
         });
     }
 
     // Check token expiration and refresh if needed
     if (Date.now() >= companyTokens.tokenExpiresAt) {
+        req.log.info('Refreshing expired Pipedrive token', { companyId });
         try {
             companyTokens = await tokenService.refreshPipedriveToken(companyId);
+            req.log.info('Successfully refreshed Pipedrive token', { companyId });
         } catch (refreshError) {
-            console.error(`Failed to refresh Pipedrive token for ${companyId} in createFullProject:`, refreshError.message);
+            req.log.error(refreshError, { companyId }, 'Failed to refresh Pipedrive token');
             return res.status(401).json({ 
-                error: `Failed to refresh Pipedrive token for company ${companyId}. Please re-authenticate.` 
+                error: `Failed to refresh Pipedrive token for company ${companyId}. Please re-authenticate.`,
+                requestId: req.id
             });
         }
     }
@@ -286,12 +308,19 @@ export const createFullProject = async (req, res) => {
         res.status(201).json(responseData);
 
     } catch (error) {
-        console.error('Error in createFullProject controller:', error.response ? error.response.data : error.message);
+        req.log.error(error, {
+            dealId,
+            companyId,
+            errorName: error.name,
+            errorMessage: error.message
+        }, 'Error in createFullProject controller');
+        
         res.status(500).json({ 
             error: 'Failed to create project.',
             details: error.message,
             dealId: dealId,
-            companyId: companyId
+            companyId: companyId,
+            requestId: req.id
         });
     }
-};
+});
