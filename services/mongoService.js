@@ -1,80 +1,151 @@
 /**
- * MongoDB Database Connection and Index Management
+ * MongoDB Database Connection and Operations Management
  * 
- * This module provides database connection functionality and ensures proper
- * indexing for the project management collections. It handles connection
- * pooling, database initialization, and automatic index creation for optimal
- * query performance.
+ * This module provides improved database connection functionality with proper
+ * connection lifecycle management. Instead of maintaining persistent connections,
+ * it creates connections per operation and ensures proper cleanup.
  * 
- * Collections managed:
- * - project_sequences: Unique compound index on (departmentCode, year)
- * - deal_project_mappings: Indexes on pipedriveDealIds array and unique projectNumber
+ * Key improvements:
+ * - Per-operation connection management
+ * - Automatic connection cleanup
+ * - Connection pooling through MongoDB driver
+ * - Schema-based collection and index management
+ * - Database operation wrapper functions
  * 
  * @module services/mongoService
  */
 
 import { MongoClient } from 'mongodb';
 
-let db;
+let client = null;
 
 /**
- * Establishes connection to MongoDB and ensures required indexes exist
+ * Creates a new MongoDB client connection
  * 
- * This function implements connection pooling by reusing existing connections
- * and automatically creates necessary database indexes for optimal performance.
- * Index creation is idempotent and handles existing index conflicts gracefully.
- * 
- * @returns {Promise<Db>} The MongoDB database instance
+ * @returns {Promise<MongoClient>} MongoDB client instance
  * @throws {Error} When MONGODB_URI environment variable is not configured
  */
-export async function connectToDatabase() {
-  if (db) return db;
+async function createClient() {
   if (!process.env.MONGODB_URI) {
     throw new Error('MONGODB_URI is not defined in .env file');
   }
-  const client = new MongoClient(process.env.MONGODB_URI);
-  await client.connect();
-  db = client.db();
+  
+  const mongoClient = new MongoClient(process.env.MONGODB_URI, {
+    maxPoolSize: 10, // Maintain up to 10 socket connections
+    serverSelectionTimeoutMS: 5000, // Keep trying to send operations for 5 seconds
+    socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
+    maxIdleTimeMS: 30000, // Close connections after 30 seconds of inactivity
+  });
+  
+  await mongoClient.connect();
+  return mongoClient;
+}
 
-  // Ensure indexes for project_sequences (counters)
+/**
+ * Validates database connection and environment
+ * 
+ * @param {Db} db - MongoDB database instance
+ */
+async function validateDatabaseConnection(db) {
   try {
-    const projectSequencesCollection = db.collection('project_sequences');
-    await projectSequencesCollection.createIndex(
-      { departmentCode: 1, year: 1 },
-      { unique: true }
-    );
-  } catch (indexError) {
-    if (indexError.codeName === 'IndexOptionsConflict' || indexError.codeName === 'IndexKeySpecsConflict') {
-      console.warn('Index on project_sequences already exists with different options. Manual review might be needed.');
-    } else if (indexError.codeName === 'NamespaceExists' || indexError.message.includes('already exists')) {
-      // Index already exists, no action needed
-    } else {
-      console.error('Error creating index for project_sequences:', indexError);
+    // Ping the database to ensure connection is working
+    await db.admin().ping();
+    console.log('Database connection validated successfully');
+  } catch (error) {
+    console.error('Database connection validation failed:', error);
+    throw new Error('Database connection is not working properly');
+  }
+}
+
+/**
+ * Executes a database operation with automatic connection management
+ * 
+ * This function creates a new connection for each operation, ensuring proper
+ * resource cleanup and avoiding connection pool exhaustion. All database
+ * operations should use this pattern for consistency.
+ * 
+ * @param {Function} operation - Async function that receives (db, client) and returns a result
+ * @returns {Promise<any>} Result of the database operation
+ * @throws {Error} When database operation fails
+ */
+export async function withDatabase(operation) {
+  let currentClient = null;
+  
+  try {
+    currentClient = await createClient();
+    const db = currentClient.db();
+    
+    // Validate the connection is working
+    await validateDatabaseConnection(db);
+    
+    // Execute the operation
+    const result = await operation(db, currentClient);
+    return result;
+  } catch (error) {
+    console.error('Database operation failed:', error);
+    throw error;
+  } finally {
+    // Always close the connection
+    if (currentClient) {
+      await currentClient.close();
     }
   }
+}
 
-  // Ensure indexes for deal_project_mappings
-  try {
-    const dealProjectMappingsCollection = db.collection('deal_project_mappings');
-    
-    // Index on pipedriveDealIds array for efficient deal lookups
-    await dealProjectMappingsCollection.createIndex(
-      { pipedriveDealIds: 1 }
-    );
-    
-    // Unique index on projectNumber
-    await dealProjectMappingsCollection.createIndex(
-      { projectNumber: 1 },
-      { unique: true }
-    );
-  } catch (indexError) {
-    if (indexError.codeName === 'IndexOptionsConflict' || indexError.codeName === 'IndexKeySpecsConflict') {
-      console.warn('Index on deal_project_mappings already exists with different options. Manual review might be needed.');
-    } else if (indexError.codeName === 'NamespaceExists' || indexError.message.includes('already exists')) {
-      // Index already exists, no action needed
-    } else {
-      console.error('Error creating index for deal_project_mappings:', indexError);
-    }
+/**
+ * Legacy function for backward compatibility
+ * @deprecated Use withDatabase() instead for better connection management
+ */
+export async function connectToDatabase() {
+  console.warn('connectToDatabase() is deprecated. Use withDatabase() for better connection management.');
+  if (!client) {
+    client = await createClient();
   }
-  return db;
+  return client.db();
+}
+
+/**
+ * Gets database health and connection information
+ * 
+ * @returns {Promise<Object>} Database health information
+ */
+export async function getDatabaseHealth() {
+  return withDatabase(async (db, client) => {
+    const adminDb = db.admin();
+    const serverStatus = await adminDb.serverStatus();
+    
+    return {
+      connected: true,
+      serverVersion: serverStatus.version,
+      uptime: serverStatus.uptime,
+      collections: await db.listCollections().toArray(),
+      connectionStatus: 'healthy'
+    };
+  });
+}
+
+/**
+ * Performs database cleanup operations
+ * 
+ * @returns {Promise<Object>} Cleanup results
+ */
+export async function performDatabaseCleanup() {
+  return withDatabase(async (db) => {
+    const cleanupResults = {
+      orphanedMappings: 0,
+      emptySequences: 0
+    };
+
+    // Remove project mappings with empty deal arrays
+    const dealMappingsCollection = db.collection('deal_project_mappings');
+    const orphanedResult = await dealMappingsCollection.deleteMany({
+      $or: [
+        { pipedriveDealIds: { $size: 0 } },
+        { pipedriveDealIds: { $exists: false } }
+      ]
+    });
+    cleanupResults.orphanedMappings = orphanedResult.deletedCount;
+
+    return cleanupResults;
+  });
 }

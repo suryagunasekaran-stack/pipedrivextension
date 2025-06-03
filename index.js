@@ -10,6 +10,7 @@ import authRoutes from './routes/authRoutes.js'; // Added .js
 import pipedriveRoutes from './routes/pipedriveRoutes.js'; // Added .js
 import xeroRoutes from './routes/xeroRoutes.js'; // Added .js
 import projectRoutes from './routes/projectRoutes.js'; // Added .js
+import databaseRoutes from './routes/databaseRoutes.js'; // Database administration routes
 
 const app = express();
 
@@ -116,6 +117,7 @@ app.use('/', authRoutes); // Mount auth routes at the root
 app.use('/', pipedriveRoutes); // Mount Pipedrive routes (includes /pipedrive-action and /api/pipedrive-data)
 app.use('/', xeroRoutes); // Mount Xero routes (includes /api/xero/status and /api/xero/create-quote)
 app.use('/', projectRoutes); // Mount project routes (includes /api/project/create-full)
+app.use('/api/database', databaseRoutes); // Mount database administration routes
 
 // Error handling middleware (must be after all routes)
 app.use(notFoundHandler); // Handle 404s
