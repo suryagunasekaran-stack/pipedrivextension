@@ -1,3 +1,9 @@
+/**
+ * @fileoverview Project creation controller handling full project lifecycle.
+ * Integrates Pipedrive deals with project numbering system and optional Xero project creation.
+ * Manages token validation, project sequence generation, and comprehensive data aggregation.
+ */
+
 import 'dotenv/config';
 import * as tokenService from '../services/tokenService.js';
 import * as pipedriveApiService from '../services/pipedriveApiService.js';
@@ -5,6 +11,16 @@ import * as xeroApiService from '../services/xeroApiService.js';
 import { getNextProjectNumber } from '../models/projectSequenceModel.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 
+/**
+ * Creates a comprehensive project by generating project numbers, integrating with Xero,
+ * and aggregating all related data from Pipedrive. Supports linking to existing projects
+ * or creating new ones with sequential numbering by department.
+ * 
+ * @param {Object} req - Express request object with body containing dealId, companyId, and optional existingProjectNumberToLink
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Returns JSON with complete project data including Xero integration status
+ * @throws {Error} Returns 400 for validation errors, 401 for auth issues, 404 for missing deals, 500 for system errors
+ */
 export const createFullProject = asyncHandler(async (req, res) => {
     const { dealId, companyId, existingProjectNumberToLink } = req.body;
 
@@ -15,7 +31,6 @@ export const createFullProject = asyncHandler(async (req, res) => {
         userAgent: req.get('User-Agent')
     });
 
-    // Validate required parameters
     if (!dealId || !companyId) {
         req.log.warn('Missing required parameters for project creation', {
             dealId: !!dealId,
@@ -27,7 +42,6 @@ export const createFullProject = asyncHandler(async (req, res) => {
         });
     }
 
-    // Get and validate Pipedrive tokens
     let companyTokens = tokenService.allCompanyTokens[companyId];
     if (!companyTokens || !companyTokens.accessToken) {
         req.log.error('Pipedrive not authenticated for company', {
@@ -41,7 +55,6 @@ export const createFullProject = asyncHandler(async (req, res) => {
         });
     }
 
-    // Check token expiration and refresh if needed
     if (Date.now() >= companyTokens.tokenExpiresAt) {
         req.log.info('Refreshing expired Pipedrive token', { companyId });
         try {
@@ -58,14 +71,12 @@ export const createFullProject = asyncHandler(async (req, res) => {
 
     const { accessToken, apiDomain } = companyTokens;
     
-    // Get environment variables for custom fields
     const departmentKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT;
     const vesselNameKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME;
     const salesInChargeKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_SALES_IN_CHARGE;
     const locationKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_LOCATION;
 
     try {
-        // 1. Fetch deal details from Pipedrive
         const dealDetails = await pipedriveApiService.getDealDetails(apiDomain, accessToken, dealId);
         
         if (!dealDetails) {
@@ -74,7 +85,6 @@ export const createFullProject = asyncHandler(async (req, res) => {
             });
         }
 
-        // 2. Extract department from deal custom field
         const departmentName = departmentKey ? dealDetails[departmentKey] : null;
         
         if (!departmentName) {
@@ -84,7 +94,6 @@ export const createFullProject = asyncHandler(async (req, res) => {
             });
         }
 
-        // 3. Generate or get project number using the MongoDB service
         let projectNumber;
         try {
             projectNumber = await getNextProjectNumber(
@@ -100,7 +109,7 @@ export const createFullProject = asyncHandler(async (req, res) => {
             });
         }
 
-        // 4. Create Xero project if Xero is connected
+        // Create Xero project if integration is available
         let xeroProject = null;
         let xeroContactId = null;
         let xeroError = null;
@@ -108,18 +117,15 @@ export const createFullProject = asyncHandler(async (req, res) => {
         const xeroTokenInfo = tokenService.allXeroTokens[companyId];
         if (xeroTokenInfo && xeroTokenInfo.accessToken && xeroTokenInfo.tenantId) {
             try {
-                // Check if Xero token needs refresh
                 let currentXeroTokenInfo = xeroTokenInfo;
                 if (Date.now() >= xeroTokenInfo.tokenExpiresAt) {
                     currentXeroTokenInfo = await tokenService.refreshXeroToken(companyId);
                 }
 
-                // Get or create Xero contact based on deal organization
                 if (dealDetails.org_id && dealDetails.org_id.value) {
                     const orgDetails = await pipedriveApiService.getOrganizationDetails(apiDomain, accessToken, dealDetails.org_id.value);
                     
                     if (orgDetails && orgDetails.name) {
-                        // Try to find existing Xero contact by organization name
                         const existingContact = await xeroApiService.findXeroContactByName(
                             currentXeroTokenInfo.accessToken, 
                             currentXeroTokenInfo.tenantId, 
@@ -129,10 +135,9 @@ export const createFullProject = asyncHandler(async (req, res) => {
                         if (existingContact) {
                             xeroContactId = existingContact.ContactID;
                         } else {
-                            // Create new Xero contact
                             const newContactPayload = { Name: orgDetails.name };
                             
-                            // Add email if person is associated with deal
+                            // Add primary email from associated person if available
                             if (dealDetails.person_id && dealDetails.person_id.value) {
                                 try {
                                     const personDetails = await pipedriveApiService.getPersonDetails(apiDomain, accessToken, dealDetails.person_id.value);
@@ -155,7 +160,6 @@ export const createFullProject = asyncHandler(async (req, res) => {
                     }
                 }
 
-                // Create Xero project if we have a contact
                 if (xeroContactId) {
                     const projectName = `${projectNumber} - ${dealDetails.title || 'Project'}`;
                     const projectData = {
@@ -168,7 +172,7 @@ export const createFullProject = asyncHandler(async (req, res) => {
                         currentXeroTokenInfo.accessToken,
                         currentXeroTokenInfo.tenantId,
                         projectData,
-                        null, // quoteId - you can link this if you have quote info
+                        null,
                         dealId,
                         companyId
                     );
@@ -177,63 +181,19 @@ export const createFullProject = asyncHandler(async (req, res) => {
                 }
                 
             } catch (xeroProjectError) {
-                console.error('=== XERO PROJECT INTEGRATION ERROR ===');
-                console.error('Failed to create Xero project for deal:', dealId);
-                console.error('Company ID:', companyId);
-                console.error('Project Number:', projectNumber);
-                console.error('Xero Contact ID:', xeroContactId);
-                console.error('Error Type:', typeof xeroProjectError);
-                console.error('Error Name:', xeroProjectError.name);
-                console.error('Error Message:', xeroProjectError.message);
-                console.error('Error Stack:', xeroProjectError.stack);
-                
-                if (xeroProjectError.response) {
-                    console.error('=== HTTP RESPONSE ERROR DETAILS ===');
-                    console.error('HTTP Status:', xeroProjectError.response.status);
-                    console.error('Status Text:', xeroProjectError.response.statusText);
-                    console.error('Response Headers:', JSON.stringify(xeroProjectError.response.headers, null, 2));
-                    console.error('Response Data (Full):', JSON.stringify(xeroProjectError.response.data, null, 2));
-                    
-                    // Check for specific Xero error patterns
-                    if (xeroProjectError.response.data) {
-                        const errorData = xeroProjectError.response.data;
-                        
-                        if (errorData.Elements) {
-                            console.error('=== XERO VALIDATION ERRORS ===');
-                            errorData.Elements.forEach((element, index) => {
-                                console.error(`Validation Error ${index + 1}:`, JSON.stringify(element, null, 2));
-                            });
-                        }
-                        
-                        if (errorData.Type) {
-                            console.error('Xero Error Type:', errorData.Type);
-                        }
-                        
-                        if (errorData.Message) {
-                            console.error('Xero Error Message:', errorData.Message);
-                        }
-                        
-                        if (errorData.Detail) {
-                            console.error('Xero Error Detail:', errorData.Detail);
-                        }
-                    }
-                } else if (xeroProjectError.request) {
-                    console.error('=== REQUEST ERROR (No Response) ===');
-                    console.error('Request was made but no response received');
-                    console.error('Request details:', xeroProjectError.request);
-                } else {
-                    console.error('=== GENERAL ERROR ===');
-                    console.error('Error in setting up the request');
-                }
-                
-                console.error('=== END XERO ERROR DETAILS ===');
+                console.error('Failed to create Xero project:', {
+                    dealId,
+                    companyId,
+                    projectNumber,
+                    error: xeroProjectError.message,
+                    status: xeroProjectError.response?.status
+                });
                 
                 xeroError = `${xeroProjectError.message} (Status: ${xeroProjectError.response?.status || 'Unknown'})`;
-                // Don't fail the entire operation if Xero project creation fails
             }
         }
 
-        // 5. Fetch additional deal-related data for comprehensive response
+        // Fetch comprehensive deal-related data
         let personDetails = null;
         if (dealDetails.person_id && dealDetails.person_id.value) {
             try {
@@ -259,27 +219,23 @@ export const createFullProject = asyncHandler(async (req, res) => {
             console.warn(`Could not fetch deal products for deal ID ${dealId}:`, error.message);
         }
 
-        // 6. Update Pipedrive deal with the generated project number
+        // Update Pipedrive deal with the generated project number
         try {
             await pipedriveApiService.updateDealWithProjectNumber(apiDomain, accessToken, dealId, projectNumber);
         } catch (updateError) {
             console.warn(`Warning: Failed to update Pipedrive deal ${dealId} with project number ${projectNumber}:`, updateError.message);
-            // Continue execution even if the update fails - the project number is still generated and stored
         }
 
-        // 7. Create enhanced deal object with custom fields
+        // Create enhanced deal object with custom fields and project number
         const projectDealObject = {
             ...dealDetails,
-            // Add custom fields to the deal object
             department: departmentName,
             vessel_name: vesselNameKey ? (dealDetails[vesselNameKey] || null) : null,
             sales_in_charge: salesInChargeKey ? (dealDetails[salesInChargeKey] || null) : null,
             location: locationKey ? (dealDetails[locationKey] || null) : null,
-            // Add the generated project number
             projectNumber: projectNumber
         };
 
-        // 8. Return comprehensive project data
         const responseData = {
             success: true,
             message: existingProjectNumberToLink 
@@ -304,7 +260,6 @@ export const createFullProject = asyncHandler(async (req, res) => {
             }
         };
 
-        const xeroStatus = xeroProject ? 'with Xero project' : (xeroError ? `with Xero error: ${xeroError}` : 'without Xero');
         res.status(201).json(responseData);
 
     } catch (error) {

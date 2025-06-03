@@ -1,3 +1,9 @@
+/**
+ * @fileoverview Pipedrive integration controller handling deal actions and data retrieval.
+ * Manages authentication state, token refresh, and redirects to frontend applications
+ * based on user actions within Pipedrive (createProject, createQuote).
+ */
+
 import 'dotenv/config';
 import * as tokenService from '../services/tokenService.js';
 import * as pipedriveApiService from '../services/pipedriveApiService.js';
@@ -5,10 +11,19 @@ import * as pipedriveApiService from '../services/pipedriveApiService.js';
 const pipedriveClientId = process.env.CLIENT_ID;
 const pipedriveClientSecret = process.env.CLIENT_SECRET;
 
+/**
+ * Handles Pipedrive app actions by validating authentication and redirecting to the appropriate frontend.
+ * Determines the UI action (createProject or createQuote) and constructs the redirect URL with parameters.
+ * 
+ * @param {Object} req - Express request object with query parameters (selectedIds, companyId, uiAction, resource)
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Redirects to frontend application or returns error response
+ * @throws {Error} Returns 400 for missing parameters, 401 for auth issues, 500 for config errors
+ */
 export const handlePipedriveAction = async (req, res) => {
     const dealId = req.query.selectedIds;
     const companyId = req.query.companyId;
-    const uiAction = req.query.uiAction; // Get the action type
+    const uiAction = req.query.uiAction;
 
     if (!companyId) {
         return res.status(400).send('Company ID is missing in the request from Pipedrive.');
@@ -40,11 +55,11 @@ export const handlePipedriveAction = async (req, res) => {
     }
 
     let frontendRedirectUrl;
-    const baseFrontendUrl = 'http://localhost:3001'; // Assuming your Next.js frontend runs on port 3001
+    const baseFrontendUrl = 'http://localhost:3001';
 
     if (uiAction === 'createProject') {
         frontendRedirectUrl = `${baseFrontendUrl}/create-project-page`;
-    } else { // Default to createQuote or existing behavior
+    } else {
         frontendRedirectUrl = `${baseFrontendUrl}/pipedrive-data-view`;
     }
 
@@ -57,8 +72,18 @@ export const handlePipedriveAction = async (req, res) => {
     }
 };
 
+/**
+ * Creates a project by fetching deal details and custom fields from Pipedrive.
+ * Extracts department, vessel name, location, and sales representative information
+ * for project initialization.
+ * 
+ * @param {Object} req - Express request object with body containing dealId and companyId
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Returns JSON with deal details and custom fields or error response
+ * @throws {Error} Returns 400 for missing params, 401 for auth issues, 404 for deal not found, 500 for API errors
+ */
 export const createProject = async (req, res) => {
-    const { dealId, companyId } = req.body; // Assuming dealId and companyId are sent in the request body
+    const { dealId, companyId } = req.body;
 
     if (!dealId || !companyId) {
         return res.status(400).json({ error: 'Deal ID and Company ID are required in the request body.' });
@@ -87,8 +112,6 @@ export const createProject = async (req, res) => {
 
     if (!xeroQuoteCustomFieldKey) {
         console.error('PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY is not set in .env.');
-        // Note: Depending on requirements, you might still proceed if other custom fields are optional
-        // return res.status(500).json({ error: 'Server configuration error: Missing Xero quote custom field key.' });
     }
 
     try {
@@ -100,8 +123,6 @@ export const createProject = async (req, res) => {
 
         const xeroQuoteNumber = xeroQuoteCustomFieldKey ? (dealDetails[xeroQuoteCustomFieldKey] || null) : null;
 
-        // Create a new object for the deal to send to the frontend
-        // This avoids mutating the original dealDetails if it's used elsewhere
         const frontendDealObject = { ...dealDetails };
 
         if (departmentKey) {
@@ -119,7 +140,7 @@ export const createProject = async (req, res) => {
 
         res.json({
             message: 'Project creation initiated (simulated). Fetched deal details and custom fields.',
-            deal: frontendDealObject, // Send the modified deal object
+            deal: frontendDealObject,
             xeroQuoteNumber: xeroQuoteNumber
         });
 
@@ -129,6 +150,15 @@ export const createProject = async (req, res) => {
     }
 };
 
+/**
+ * Retrieves comprehensive Pipedrive data for a specific deal including deal details,
+ * associated person, organization, and products.
+ * 
+ * @param {Object} req - Express request object with query parameters (dealId, companyId)
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Returns JSON with deal, person, organization, and products data
+ * @throws {Error} Returns 400 for missing params, 401 for auth issues, 500 for API errors
+ */
 export const getPipedriveData = async (req, res) => {
     const { dealId, companyId } = req.query;
 

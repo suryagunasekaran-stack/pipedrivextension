@@ -1,8 +1,14 @@
+/**
+ * @fileoverview Authentication controller handling OAuth flows for Pipedrive and Xero integrations.
+ * Manages CSRF tokens, authorization redirects, and token exchange for both platforms.
+ * Exports functions for initiating auth flows and handling OAuth callbacks.
+ */
+
 import 'dotenv/config';
 import crypto from 'crypto';
 import axios from 'axios';
-import * as tokenService from '../services/tokenService.js'; // Added .js and changed import style
-import * as pipedriveApiService from '../services/pipedriveApiService.js'; // Added .js and changed import style
+import * as tokenService from '../services/tokenService.js';
+import * as pipedriveApiService from '../services/pipedriveApiService.js';
 
 const pipedriveClientId = process.env.CLIENT_ID;
 const pipedriveClientSecret = process.env.CLIENT_SECRET;
@@ -10,6 +16,14 @@ const redirectUri = process.env.REDIRECT_URI;
 const xeroClientId = process.env.XERO_CLIENT_ID;
 const xeroRedirectUri = process.env.XERO_REDIRECT_URI;
 
+/**
+ * Initiates the Pipedrive OAuth authorization flow by generating a CSRF token
+ * and redirecting the user to Pipedrive's authorization URL.
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @returns {void} Sends HTML response with authorization link
+ */
 export const initiatePipedriveAuth = (req, res) => {
     req.log.info('Initiating Pipedrive OAuth flow', {
         userAgent: req.get('User-Agent'),
@@ -17,13 +31,11 @@ export const initiatePipedriveAuth = (req, res) => {
     });
 
     const csrfToken = crypto.randomBytes(18).toString('hex');
-    tokenService.setCsrfTokenStore(csrfToken); // Store CSRF token
+    tokenService.setCsrfTokenStore(csrfToken);
 
-    // Define the required scopes
     const scopes = [
-        'deals:full', // Allows reading, adding, updating, and deleting deals
-        'users:read'  // Allows reading users data (needed for /users/me)
-        // Add other scopes your app might need in the future, e.g., 'organizations:full', 'persons:full'
+        'deals:full',
+        'users:read'
     ].join(' ');
 
     const authorizationUrl = `https://oauth.pipedrive.com/oauth/authorize?client_id=${pipedriveClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${csrfToken}&scope=${encodeURIComponent(scopes)}`;
@@ -37,6 +49,16 @@ export const initiatePipedriveAuth = (req, res) => {
     res.send(`<h1>Pipedrive OAuth Example</h1><a href="${authorizationUrl}">Connect to Pipedrive</a>`);
 };
 
+/**
+ * Handles the OAuth callback from Pipedrive after user authorization.
+ * Validates CSRF token, exchanges authorization code for access tokens,
+ * and stores tokens for the authenticated company.
+ * 
+ * @param {Object} req - Express request object with query parameters (code, state)
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Sends success or error response
+ * @throws {Error} Returns 403 for CSRF mismatch, 400 for missing code, 500 for API errors
+ */
 export const handlePipedriveCallback = async (req, res) => {
     const { code, state } = req.query;
     const storedCsrfToken = tokenService.getCsrfTokenStore();
@@ -83,7 +105,7 @@ export const handlePipedriveCallback = async (req, res) => {
             accessToken: access_token,
             refreshToken: refresh_token,
             apiDomain: api_domain,
-            tokenExpiresAt: Date.now() + (expires_in * 1000) - (5 * 60 * 1000)
+            tokenExpiresAt: Date.now() + (expires_in * 1000) - (5 * 60 * 1000) // 5-minute buffer before expiry
         };
 
         await tokenService.saveAllTokensToFile();
@@ -96,6 +118,14 @@ export const handlePipedriveCallback = async (req, res) => {
     }
 };
 
+/**
+ * Initiates the Xero OAuth authorization flow for a specific Pipedrive company.
+ * Associates the Xero auth with a Pipedrive company via CSRF token mapping.
+ * 
+ * @param {Object} req - Express request object with query parameter pipedriveCompanyId
+ * @param {Object} res - Express response object
+ * @returns {void} Redirects to Xero authorization URL or returns 400 for missing company ID
+ */
 export const initiateXeroAuth = (req, res) => {
     const { pipedriveCompanyId } = req.query;
 
@@ -122,6 +152,16 @@ export const initiateXeroAuth = (req, res) => {
     res.redirect(authorizationUrl);
 };
 
+/**
+ * Handles the OAuth callback from Xero after user authorization.
+ * Validates CSRF token, exchanges authorization code for access tokens,
+ * retrieves tenant information, and stores tokens linked to Pipedrive company.
+ * 
+ * @param {Object} req - Express request object with query parameters (code, state)
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Sends success or error response
+ * @throws {Error} Returns 403 for CSRF mismatch, 400 for missing code, 500 for API errors
+ */
 export const handleXeroCallback = async (req, res) => {
     const { code, state } = req.query;
     let xeroCsrfStore = tokenService.getXeroCsrfTokenStore();
@@ -156,13 +196,13 @@ export const handleXeroCallback = async (req, res) => {
 
         const { access_token, refresh_token, expires_in, scope } = tokenResponse.data;
         
-        const connections = await (await import('../services/xeroApiService.js')).getXeroConnections(access_token); // Dynamic import for xeroApiService
+        const connections = await (await import('../services/xeroApiService.js')).getXeroConnections(access_token);
         const tenantId = connections[0].tenantId;
 
         tokenService.allXeroTokens[pipedriveCompanyId] = {
             accessToken: access_token,
             refreshToken: refresh_token,
-            tokenExpiresAt: Date.now() + (expires_in * 1000) - (5 * 60 * 1000),
+            tokenExpiresAt: Date.now() + (expires_in * 1000) - (5 * 60 * 1000), // 5-minute buffer before expiry
             tenantId: tenantId,
             scopes: scope
         };
