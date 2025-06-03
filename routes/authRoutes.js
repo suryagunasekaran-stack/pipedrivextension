@@ -20,11 +20,27 @@
 import express from 'express';
 import * as authController from '../controllers/authController.js';
 import { checkAuthRequirements } from '../middleware/authMiddleware.js';
+import * as tokenService from '../services/tokenService.js';
 
 const router = express.Router();
 
 // Pipedrive OAuth Routes
-router.get('/', authController.initiatePipedriveAuth);
+router.get('/', async (req, res) => {
+    // Check if there's a company ID in the query
+    const companyId = req.query.companyId;
+    
+    if (companyId) {
+        // If company ID is provided, check auth status
+        const token = await tokenService.getAuthToken(companyId, 'pipedrive');
+        if (token && token.accessToken) {
+            // If authenticated, redirect to success page
+            return res.redirect(`${pipedriveSuccessPageUrl}?companyId=${encodeURIComponent(companyId)}`);
+        }
+    }
+    
+    // If no company ID or not authenticated, initiate Pipedrive auth
+    return authController.initiatePipedriveAuth(req, res);
+});
 router.get('/callback', authController.handlePipedriveCallback);
 router.get('/auth-url', authController.getPipedriveAuthUrl);
 router.post('/auth-url', authController.getPipedriveAuthUrl); // Support POST for frontend
@@ -45,6 +61,8 @@ router.post('/logout', authController.logout);
 
 // Xero OAuth Routes
 router.get('/connect-xero', authController.initiateXeroAuth);
+router.get('/auth/connect-xero', authController.initiateXeroAuth);
 router.get('/xero-callback', authController.handleXeroCallback);
+router.get('/auth/xero-callback', authController.handleXeroCallback);
 
 export default router;

@@ -17,7 +17,7 @@ const xeroClientId = process.env.XERO_CLIENT_ID;
 const xeroRedirectUri = process.env.XERO_REDIRECT_URI;
 
 // Frontend URLs for redirects
-const frontendBaseUrl = process.env.FRONTEND_BASE_URL || 'http://localhost:3000';
+const frontendBaseUrl = process.env.FRONTEND_BASE_URL || 'http://localhost:3001';
 const pipedriveAuthPageUrl = `${frontendBaseUrl}/auth/pipedrive`;
 const pipedriveSuccessPageUrl = `${frontendBaseUrl}/auth/pipedrive/success`;
 const pipedriveErrorPageUrl = `${frontendBaseUrl}/auth/pipedrive/error`;
@@ -111,22 +111,21 @@ export const handlePipedriveCallback = async (req, res) => {
         const userData = await pipedriveApiService.getPipedriveUserMe(api_domain, access_token);
         const companyIdForTokenStorage = userData.company_id.toString();
 
-        tokenService.allCompanyTokens[companyIdForTokenStorage] = {
+        // Store token using the new database-backed approach
+        await tokenService.storeAuthToken(companyIdForTokenStorage, 'pipedrive', {
             accessToken: access_token,
             refreshToken: refresh_token,
             apiDomain: api_domain,
             tokenExpiresAt: Date.now() + (expires_in * 1000) - (5 * 60 * 1000) // 5-minute buffer before expiry
-        };
-
-        await tokenService.saveAllTokensToFile();
+        });
 
         req.log.info('Pipedrive authentication successful', {
             companyId: companyIdForTokenStorage,
             apiDomain: api_domain
         });
 
-        // Redirect to Pipedrive after successful authentication
-        res.redirect('https://www.pipedrive.com');
+        // Redirect to success page after successful authentication
+        res.redirect(`${pipedriveSuccessPageUrl}?companyId=${encodeURIComponent(companyIdForTokenStorage)}`);
 
     } catch (error) {
         req.log.error('Error during Pipedrive OAuth callback', {
@@ -298,9 +297,9 @@ export const getPipedriveAuthUrl = (req, res) => {
  * 
  * @param {Object} req - Express request object with query parameter companyId
  * @param {Object} res - Express response object
- * @returns {void} Returns JSON with authentication status
+ * @returns {Promise<void>} Returns JSON with authentication status
  */
-export const checkAuthStatus = (req, res) => {
+export const checkAuthStatus = async (req, res) => {
     // Support companyId from query or request body for POST and GET
     const companyId = req.query.companyId || req.body.companyId;
 
@@ -316,41 +315,54 @@ export const checkAuthStatus = (req, res) => {
         });
     }
 
-    const pipedriveTokens = tokenService.allCompanyTokens[companyId];
-    const xeroTokens = tokenService.allXeroTokens[companyId];
+    try {
+        // Get tokens from database
+        const pipedriveToken = await tokenService.getAuthToken(companyId, 'pipedrive');
+        const xeroToken = await tokenService.getAuthToken(companyId, 'xero');
 
-    const currentTime = Date.now();
+        const currentTime = Date.now();
 
-    const authStatus = {
-        companyId: companyId,
-        pipedrive: {
-            authenticated: !!(pipedriveTokens && pipedriveTokens.accessToken),
-            tokenExpired: pipedriveTokens ? currentTime >= pipedriveTokens.tokenExpiresAt : true,
-            apiDomain: pipedriveTokens?.apiDomain || null
-        },
-        xero: {
-            authenticated: !!(xeroTokens && xeroTokens.accessToken),
-            tokenExpired: xeroTokens ? currentTime >= xeroTokens.tokenExpiresAt : true,
-            tenantId: xeroTokens?.tenantId || null
-        }
-    };
+        const authStatus = {
+            companyId: companyId,
+            pipedrive: {
+                authenticated: !!(pipedriveToken && pipedriveToken.accessToken),
+                tokenExpired: pipedriveToken ? currentTime >= pipedriveToken.tokenExpiresAt : true,
+                apiDomain: pipedriveToken?.apiDomain || null
+            },
+            xero: {
+                authenticated: !!(xeroToken && xeroToken.accessToken),
+                tokenExpired: xeroToken ? currentTime >= xeroToken.tokenExpiresAt : true,
+                tenantId: xeroToken?.tenantId || null
+            }
+        };
 
-    // Check if tokens need refresh
-    authStatus.pipedrive.needsRefresh = authStatus.pipedrive.authenticated && authStatus.pipedrive.tokenExpired;
-    authStatus.xero.needsRefresh = authStatus.xero.authenticated && authStatus.xero.tokenExpired;
+        // Check if tokens need refresh
+        authStatus.pipedrive.needsRefresh = authStatus.pipedrive.authenticated && authStatus.pipedrive.tokenExpired;
+        authStatus.xero.needsRefresh = authStatus.xero.authenticated && authStatus.xero.tokenExpired;
 
-    req.log.info('Auth status checked', {
-        companyId,
-        pipedriveAuth: authStatus.pipedrive.authenticated,
-        xeroAuth: authStatus.xero.authenticated,
-        pipedriveExpired: authStatus.pipedrive.tokenExpired,
-        xeroExpired: authStatus.xero.tokenExpired
-    });
+        req.log.info('Auth status checked', {
+            companyId,
+            pipedriveAuth: authStatus.pipedrive.authenticated,
+            xeroAuth: authStatus.xero.authenticated,
+            pipedriveExpired: authStatus.pipedrive.tokenExpired,
+            xeroExpired: authStatus.xero.tokenExpired
+        });
 
-    res.json({
-        success: true,
-        data: authStatus
-    });
+        res.json({
+            success: true,
+            data: authStatus
+        });
+    } catch (error) {
+        req.log.error('Error checking auth status', {
+            companyId,
+            error: error.message
+        });
+
+        res.status(500).json({
+            success: false,
+            error: 'Failed to check authentication status'
+        });
+    }
 };
 
 /**
@@ -371,17 +383,9 @@ export const logout = async (req, res) => {
     }
 
     try {
-        // Clear tokens
-        if (tokenService.allCompanyTokens[companyId]) {
-            delete tokenService.allCompanyTokens[companyId];
-        }
-        if (tokenService.allXeroTokens[companyId]) {
-            delete tokenService.allXeroTokens[companyId];
-        }
-
-        // Save updated token files
-        await tokenService.saveAllTokensToFile();
-        await tokenService.saveAllXeroTokensToFile();
+        // Deactivate tokens in database
+        await tokenService.deactivateAuthToken(companyId, 'pipedrive');
+        await tokenService.deactivateAuthToken(companyId, 'xero');
 
         req.log.info('User logged out successfully', {
             companyId

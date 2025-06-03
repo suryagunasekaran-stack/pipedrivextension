@@ -37,6 +37,42 @@ const xeroClientSecret = process.env.XERO_CLIENT_SECRET;
 const tokenCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+// CSRF token storage
+let csrfTokenStore = null;
+let xeroCsrfTokenStore = {};
+
+/**
+ * Sets the CSRF token for Pipedrive OAuth
+ * @param {string} token - The CSRF token to store
+ */
+export function setCsrfTokenStore(token) {
+    csrfTokenStore = token;
+}
+
+/**
+ * Gets the stored CSRF token for Pipedrive OAuth
+ * @returns {string|null} The stored CSRF token or null if not set
+ */
+export function getCsrfTokenStore() {
+    return csrfTokenStore;
+}
+
+/**
+ * Sets the CSRF token for Xero OAuth
+ * @param {Object} store - The CSRF token store object
+ */
+export function setXeroCsrfTokenStore(store) {
+    xeroCsrfTokenStore = store;
+}
+
+/**
+ * Gets the stored CSRF token for Xero OAuth
+ * @returns {Object} The stored CSRF token store
+ */
+export function getXeroCsrfTokenStore() {
+    return xeroCsrfTokenStore;
+}
+
 /**
  * Encrypts sensitive token data
  * 

@@ -15,27 +15,43 @@ import { v4 as uuidv4 } from 'uuid';
  * 
  * @param {Object} req - Express request object with query parameter pipedriveCompanyId
  * @param {Object} res - Express response object
- * @returns {void} Returns JSON with connection status and reconnection requirements
+ * @returns {Promise<void>} Returns JSON with connection status and reconnection requirements
  */
-export const getXeroStatus = (req, res) => {
+export const getXeroStatus = async (req, res) => {
     const { pipedriveCompanyId } = req.query;
 
     if (!pipedriveCompanyId) {
         return res.status(400).json({ error: 'Pipedrive Company ID is required.' });
     }
 
-    const xeroTokenInfo = tokenService.allXeroTokens[pipedriveCompanyId];
+    try {
+        const xeroToken = await tokenService.getAuthToken(pipedriveCompanyId, 'xero');
+        const currentTime = Date.now();
 
-    if (xeroTokenInfo && xeroTokenInfo.accessToken && xeroTokenInfo.tenantId) {
-        const isConnected = true;
-        const needsReconnect = Date.now() >= (xeroTokenInfo.tokenExpiresAt || 0);
-        res.json({ 
-            isConnected: isConnected, 
-            needsReconnect: needsReconnect,
-            message: isConnected ? 'Xero is connected.' : 'Xero is not connected.' 
+        if (xeroToken && xeroToken.accessToken && xeroToken.tenantId) {
+            const isConnected = true;
+            const needsReconnect = currentTime >= (xeroToken.tokenExpiresAt || 0);
+            res.json({ 
+                isConnected: isConnected, 
+                needsReconnect: needsReconnect,
+                message: isConnected ? 'Xero is connected.' : 'Xero is not connected.' 
+            });
+        } else {
+            res.json({ 
+                isConnected: false, 
+                message: 'Xero is not connected.',
+                authUrl: `http://localhost:3000/auth/connect-xero?pipedriveCompanyId=${pipedriveCompanyId}`
+            });
+        }
+    } catch (error) {
+        req.log.error('Error checking Xero connection status', {
+            pipedriveCompanyId,
+            error: error.message
         });
-    } else {
-        res.json({ isConnected: false, message: 'Xero is not connected.' });
+        res.status(500).json({ 
+            error: 'Failed to check Xero connection status',
+            details: error.message
+        });
     }
 };
 
