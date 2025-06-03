@@ -1,14 +1,27 @@
+/**
+ * Pipedrive Integration Routes
+ * 
+ * Handles all Pipedrive-related API endpoints including deal management,
+ * project creation, and data retrieval. This module provides the REST API
+ * interface for Pipedrive operations and webhook handling.
+ * 
+ * Routes:
+ * - GET /pipedrive-action - Handle Pipedrive app extension actions
+ * - GET /api/pipedrive-data - Retrieve Pipedrive data for frontend
+ * - POST /api/pipedrive/create-project - Create project from Pipedrive deal
+ * 
+ * @module routes/pipedriveRoutes
+ */
+
 import express from 'express';
-const router = express.Router();
-// Import specific functions from the controller
 import { getPipedriveData, createProject, handlePipedriveAction } from '../controllers/pipedriveController.js';
 
+const router = express.Router();
+
 // Pipedrive Action URL (from App Extensions)
-// Use the directly imported function
 router.get('/pipedrive-action', handlePipedriveAction);
 
 // API to get Pipedrive data for frontend
-// Use the directly imported function
 router.get('/api/pipedrive-data', getPipedriveData);
 
 // Route to handle the Pipedrive action for creating a project

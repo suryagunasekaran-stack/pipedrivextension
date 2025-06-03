@@ -1,8 +1,32 @@
-// filepath: /Users/suryagunasekaran/Desktop/pipedriveapplication/services/mongoService.js
+/**
+ * MongoDB Database Connection and Index Management
+ * 
+ * This module provides database connection functionality and ensures proper
+ * indexing for the project management collections. It handles connection
+ * pooling, database initialization, and automatic index creation for optimal
+ * query performance.
+ * 
+ * Collections managed:
+ * - project_sequences: Unique compound index on (departmentCode, year)
+ * - deal_project_mappings: Indexes on pipedriveDealIds array and unique projectNumber
+ * 
+ * @module services/mongoService
+ */
+
 import { MongoClient } from 'mongodb';
 
 let db;
 
+/**
+ * Establishes connection to MongoDB and ensures required indexes exist
+ * 
+ * This function implements connection pooling by reusing existing connections
+ * and automatically creates necessary database indexes for optimal performance.
+ * Index creation is idempotent and handles existing index conflicts gracefully.
+ * 
+ * @returns {Promise<Db>} The MongoDB database instance
+ * @throws {Error} When MONGODB_URI environment variable is not configured
+ */
 export async function connectToDatabase() {
   if (db) return db;
   if (!process.env.MONGODB_URI) {
@@ -10,7 +34,7 @@ export async function connectToDatabase() {
   }
   const client = new MongoClient(process.env.MONGODB_URI);
   await client.connect();
-  db = client.db(); // By default, uses the database specified in the MONGODB_URI
+  db = client.db();
 
   // Ensure indexes for project_sequences (counters)
   try {
@@ -21,9 +45,9 @@ export async function connectToDatabase() {
     );
   } catch (indexError) {
     if (indexError.codeName === 'IndexOptionsConflict' || indexError.codeName === 'IndexKeySpecsConflict') {
-      console.warn('Index on project_sequences already exists with different options or key specs. Manual review might be needed.');
+      console.warn('Index on project_sequences already exists with different options. Manual review might be needed.');
     } else if (indexError.codeName === 'NamespaceExists' || indexError.message.includes('already exists')) {
-        // Index on project_sequences (departmentCode, year) likely already exists.
+      // Index already exists, no action needed
     } else {
       console.error('Error creating index for project_sequences:', indexError);
     }
@@ -33,7 +57,7 @@ export async function connectToDatabase() {
   try {
     const dealProjectMappingsCollection = db.collection('deal_project_mappings');
     
-    // Index on pipedriveDealIds array - this allows efficient lookups when checking if a deal ID exists
+    // Index on pipedriveDealIds array for efficient deal lookups
     await dealProjectMappingsCollection.createIndex(
       { pipedriveDealIds: 1 }
     );
@@ -45,9 +69,9 @@ export async function connectToDatabase() {
     );
   } catch (indexError) {
     if (indexError.codeName === 'IndexOptionsConflict' || indexError.codeName === 'IndexKeySpecsConflict') {
-      console.warn('Index on deal_project_mappings already exists with different options or key specs. Manual review might be needed.');
+      console.warn('Index on deal_project_mappings already exists with different options. Manual review might be needed.');
     } else if (indexError.codeName === 'NamespaceExists' || indexError.message.includes('already exists')) {
-        // Index on deal_project_mappings already exists.
+      // Index already exists, no action needed
     } else {
       console.error('Error creating index for deal_project_mappings:', indexError);
     }

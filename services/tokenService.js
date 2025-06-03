@@ -1,10 +1,27 @@
-import 'dotenv/config';
-import fs from 'fs/promises'; // Changed to import fs from 'fs/promises'
-import path from 'path'; // Changed to import path from 'path'
-import axios from 'axios'; // Changed to import axios from 'axios'
-import crypto from 'crypto'; // Changed to import crypto from 'crypto'
+/**
+ * OAuth Token Management Service
+ * 
+ * This module handles OAuth token lifecycle management for both Pipedrive and Xero
+ * integrations. It provides secure token storage, automatic refresh capabilities,
+ * and CSRF token management for OAuth flows.
+ * 
+ * Key features:
+ * - Persistent token storage in JSON files
+ * - Automatic token refresh before expiration
+ * - Multi-company support for Pipedrive tokens
+ * - CSRF token management for secure OAuth flows
+ * - Graceful error handling for token-related operations
+ * 
+ * @module services/tokenService
+ */
 
-const __dirname = path.dirname(new URL(import.meta.url).pathname); // Define __dirname for ES modules
+import 'dotenv/config';
+import fs from 'fs/promises';
+import path from 'path';
+import axios from 'axios';
+import crypto from 'crypto';
+
+const __dirname = path.dirname(new URL(import.meta.url).pathname);
 
 const pipedriveClientId = process.env.CLIENT_ID;
 const pipedriveClientSecret = process.env.CLIENT_SECRET;
@@ -19,6 +36,11 @@ export let allXeroTokens = {}; // { pipedriveCompanyId: { accessToken, refreshTo
 export let csrfTokenStore = ''; // For Pipedrive OAuth
 let xeroCsrfTokenStoreInternal = {}; // { csrfToken: pipedriveCompanyId } For Xero OAuth
 
+/**
+ * Saves all Pipedrive company tokens to persistent storage
+ * 
+ * @returns {Promise<void>}
+ */
 export async function saveAllTokensToFile() {
     try {
         const data = JSON.stringify(allCompanyTokens, null, 2);
@@ -28,20 +50,30 @@ export async function saveAllTokensToFile() {
     }
 }
 
+/**
+ * Loads all Pipedrive company tokens from persistent storage
+ * 
+ * @returns {Promise<void>}
+ */
 export async function loadAllTokensFromFile() {
     try {
         const data = await fs.readFile(TOKEN_FILE_PATH);
         allCompanyTokens = JSON.parse(data);
     } catch (error) {
         if (error.code === 'ENOENT') {
-            // Pipedrive token file not found. Proceeding with empty tokens store.
+            // Token file not found, proceeding with empty tokens store
         } else {
             console.error('Error loading Pipedrive company tokens from file:', error);
         }
-        allCompanyTokens = {}; // Initialize if file not found or error
+        allCompanyTokens = {};
     }
 }
 
+/**
+ * Saves all Xero tokens to persistent storage
+ * 
+ * @returns {Promise<void>}
+ */
 export async function saveAllXeroTokensToFile() {
     try {
         const data = JSON.stringify(allXeroTokens, null, 2);
@@ -51,20 +83,32 @@ export async function saveAllXeroTokensToFile() {
     }
 }
 
+/**
+ * Loads all Xero tokens from persistent storage
+ * 
+ * @returns {Promise<void>}
+ */
 export async function loadAllXeroTokensFromFile() {
     try {
         const data = await fs.readFile(XERO_TOKEN_FILE_PATH);
         allXeroTokens = JSON.parse(data);
     } catch (error) {
         if (error.code === 'ENOENT') {
-            // Xero token file not found. Proceeding with empty Xero tokens store.
+            // Xero token file not found, proceeding with empty tokens store
         } else {
             console.error('Error loading Xero tokens from file:', error);
         }
-        allXeroTokens = {}; // Initialize if file not found or error
+        allXeroTokens = {};
     }
 }
 
+/**
+ * Refreshes a Pipedrive access token using the refresh token
+ * 
+ * @param {string} companyId - The Pipedrive company ID
+ * @returns {Promise<Object>} Updated token information
+ * @throws {Error} When refresh token is unavailable or refresh fails
+ */
 export async function refreshPipedriveToken(companyId) {
     const companyTokens = allCompanyTokens[companyId];
     if (!companyTokens || !companyTokens.refreshToken) {
@@ -105,6 +149,13 @@ export async function refreshPipedriveToken(companyId) {
     }
 }
 
+/**
+ * Refreshes a Xero access token using the refresh token
+ * 
+ * @param {string} pipedriveCompanyId - The Pipedrive company ID associated with Xero tokens
+ * @returns {Promise<Object>} Updated Xero token information
+ * @throws {Error} When refresh token is unavailable or refresh fails
+ */
 export async function refreshXeroToken(pipedriveCompanyId) {
     const xeroTokenInfo = allXeroTokens[pipedriveCompanyId];
     if (!xeroTokenInfo || !xeroTokenInfo.refreshToken) {
@@ -144,12 +195,21 @@ export async function refreshXeroToken(pipedriveCompanyId) {
     }
 }
 
-// Getter and Setter for xeroCsrfTokenStore to manage it internally if direct export is problematic
+// CSRF token management functions
 export const getXeroCsrfTokenStore = () => xeroCsrfTokenStoreInternal;
 export const setXeroCsrfTokenStore = (store) => { xeroCsrfTokenStoreInternal = store; };
 export const getCsrfTokenStore = () => csrfTokenStore;
 export const setCsrfTokenStore = (token) => { csrfTokenStore = token; };
 
+/**
+ * Retrieves a valid Pipedrive access token for a company
+ * 
+ * Automatically handles token refresh if the current token is expired or close to expiring.
+ * Returns null if token cannot be obtained or refreshed.
+ * 
+ * @param {string} companyId - The Pipedrive company ID
+ * @returns {Promise<string|null>} Valid access token or null if unavailable
+ */
 export async function getPipedriveAccessToken(companyId) {
     let companyTokens = allCompanyTokens[companyId];
 
@@ -158,18 +218,18 @@ export async function getPipedriveAccessToken(companyId) {
             companyTokens = await refreshPipedriveToken(companyId);
         } catch (error) {
             console.error(`Failed to obtain Pipedrive token for company ${companyId} after attempting refresh:`, error.message);
-            return null; // Or throw error, depending on desired handling
+            return null;
         }
     }
 
-    // Check if the token is expired or close to expiring (e.g., within 5 minutes)
+    // Check if the token is expired or close to expiring (within 5 minutes)
     const now = Date.now();
     if (companyTokens.tokenExpiresAt && now >= companyTokens.tokenExpiresAt) {
         try {
             companyTokens = await refreshPipedriveToken(companyId);
         } catch (error) {
             console.error(`Failed to refresh Pipedrive token for company ${companyId}:`, error.message);
-            return null; // Or throw error
+            return null;
         }
     }
     return companyTokens ? companyTokens.accessToken : null;

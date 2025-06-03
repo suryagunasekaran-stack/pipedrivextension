@@ -1,5 +1,31 @@
-import axios from 'axios'; // Ensure axios is imported
+/**
+ * Xero API Integration Service
+ * 
+ * This module provides a comprehensive interface to the Xero accounting API,
+ * handling contact management, quote creation and updates, project management,
+ * and tenant connections. All functions include proper error handling and
+ * validation for reliable integration with the Xero platform.
+ * 
+ * Key features:
+ * - Tenant connection management
+ * - Contact search by email and name with validation
+ * - Contact creation with proper error handling
+ * - Quote creation with idempotency support
+ * - Quote status management with validation
+ * - Project creation and management
+ * 
+ * @module services/xeroApiService
+ */
 
+import axios from 'axios';
+
+/**
+ * Retrieves all Xero tenant connections for the authenticated user
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @returns {Promise<Array>} Array of tenant connection objects
+ * @throws {Error} When no tenants are found for the user
+ */
 export async function getXeroConnections(accessToken) {
     const connectionsUrl = 'https://api.xero.com/connections';
     const response = await axios.get(connectionsUrl, {
@@ -11,9 +37,17 @@ export async function getXeroConnections(accessToken) {
     if (!response.data || response.data.length === 0) {
         throw new Error('No Xero tenants found for this user.');
     }
-    return response.data; // Returns an array of connections
+    return response.data;
 }
 
+/**
+ * Finds a Xero contact by email address
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {string} email - Email address to search for
+ * @returns {Promise<Object|null>} Contact object or null if not found
+ */
 export const findXeroContactByEmail = async (accessToken, tenantId, email) => {
   if (!email) return null;
   try {
@@ -31,23 +65,27 @@ export const findXeroContactByEmail = async (accessToken, tenantId, email) => {
       }
     );
     if (response.data.Contacts && response.data.Contacts.length > 0) {
-      return response.data.Contacts[0]; // Return the first match
+      return response.data.Contacts[0];
     }
     return null;
   } catch (error) {
     console.error('Error finding Xero contact by email:', error.response ? error.response.data : error.message);
-    // If it's a 404 or similar, it's not an "error" in the sense of "contact not found"
     if (error.response && error.response.status === 400 && error.response.data && error.response.data.Message && error.response.data.Message.includes("validation error")) {
-        // This can happen if the email is badly formatted for the query
-        console.warn("Validation error likely in email format for Xero query:", email);
+        console.warn("Validation error in email format for Xero query:", email);
         return null;
     }
-    // For other errors, rethrow or handle as appropriate
-    // For now, let's not throw, just return null, as "not found" is a valid outcome.
     return null;
   }
 };
 
+/**
+ * Finds a Xero contact by name
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {string} name - Contact name to search for
+ * @returns {Promise<Object|null>} Contact object or null if not found
+ */
 export const findXeroContactByName = async (accessToken, tenantId, name) => {
   if (!name) return null;
   try {
@@ -60,16 +98,12 @@ export const findXeroContactByName = async (accessToken, tenantId, name) => {
           Accept: 'application/json',
         },
         params: {
-          // Ensure the name is properly escaped for the query string if it contains special characters.
-          // For simplicity, direct string interpolation is used here. Consider a robust escaping mechanism if names are complex.
-          where: `Name=="${name.replace(/"/g, '\\"')}"` // Basic escaping for double quotes in name
+          where: `Name=="${name.replace(/"/g, '\\"')}"` // Escape quotes in name
         },
       }
     );
     if (response.data.Contacts && response.data.Contacts.length > 0) {
-      // Xero's name filter can be broad. You might want to add more checks
-      // if multiple contacts can have similar names.
-      return response.data.Contacts[0]; // Return the first match
+      return response.data.Contacts[0];
     }
     return null;
   } catch (error) {
@@ -82,11 +116,20 @@ export const findXeroContactByName = async (accessToken, tenantId, name) => {
   }
 };
 
+/**
+ * Creates a new contact in Xero
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {Object} contactPayload - Contact data to create
+ * @returns {Promise<Object>} Created contact object
+ * @throws {Error} When contact creation fails
+ */
 export const createXeroContact = async (accessToken, tenantId, contactPayload) => {
   try {
-    const response = await axios.put( // Using PUT to create one or more contacts
+    const response = await axios.put(
       'https://api.xero.com/api.xro/2.0/Contacts',
-      { Contacts: [contactPayload] }, // Xero API expects an array of contacts
+      { Contacts: [contactPayload] },
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -96,20 +139,28 @@ export const createXeroContact = async (accessToken, tenantId, contactPayload) =
         },
       }
     );
-    return response.data.Contacts[0]; // Return the first created/updated contact object
+    return response.data.Contacts[0];
   } catch (error) {
     console.error(
       'Error creating Xero contact:',
       error.response ? JSON.stringify(error.response.data, null, 2) : error.message
     );
-    throw error; // Re-throw the error to be handled by the controller
+    throw error;
   }
 };
 
-// Assuming createQuote and getXeroTenantId are defined elsewhere in this file or imported
-// Make sure getXeroTenantId is exported if it's in this file and used by other services/controllers directly.
-// export const getXeroTenantId = async (accessToken) => { ... };
 
+/**
+ * Creates a new quote in Xero with idempotency support
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {Object} quotePayload - Quote data to create
+ * @param {string} [idempotencyKey] - Optional idempotency key for duplicate prevention
+ * @param {string} [pipedriveDealReference] - Optional Pipedrive deal reference
+ * @returns {Promise<Object>} Created quote object
+ * @throws {Error} When quote creation fails or validation errors occur
+ */
 export const createQuote = async (accessToken, tenantId, quotePayload, idempotencyKey, pipedriveDealReference) => {
   // Ensure it uses the idempotencyKey if provided
   const headers = {
@@ -122,7 +173,6 @@ export const createQuote = async (accessToken, tenantId, quotePayload, idempoten
     headers['Idempotency-Key'] = idempotencyKey;
   }
 
-  // Add Pipedrive deal reference to the quote payload
   const finalQuotePayload = {
     ...quotePayload,
     ...(pipedriveDealReference && { Reference: pipedriveDealReference })
@@ -131,29 +181,36 @@ export const createQuote = async (accessToken, tenantId, quotePayload, idempoten
   try {
     const response = await axios.put(
       `https://api.xero.com/api.xro/2.0/Quotes`,
-      { Quotes: [finalQuotePayload] }, // Use the payload with the reference
+      { Quotes: [finalQuotePayload] },
       { headers }
     );
-    // Assuming response.data.Quotes[0] is the created quote
-    return response.data.Quotes[0]; 
+    return response.data.Quotes[0];
   } catch (error) {
     console.error(
       'Error creating Xero quote:',
       error.response ? JSON.stringify(error.response.data, null, 2) : error.message
     );
-    // Add more specific error handling if needed based on Xero's error responses
     if (error.response && error.response.data && error.response.data.Elements) {
-        // Handle validation errors specifically
         throw {
             message: "Xero API validation error while creating quote.",
             details: error.response.data.Elements,
             status: error.response.status
         };
     }
-    throw error; // Re-throw for controller to handle
+    throw error;
   }
 };
 
+/**
+ * Updates the status of an existing Xero quote
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {string} quoteId - Quote ID to update
+ * @param {string} status - New status (DRAFT, SENT, ACCEPTED, DECLINED, INVOICED)
+ * @returns {Promise<Object>} Updated quote object
+ * @throws {Error} When quote ID/status missing or validation fails
+ */
 export const updateQuoteStatus = async (accessToken, tenantId, quoteId, status) => {
   if (!quoteId || !status) {
     throw new Error('Quote ID and status are required for updating quote status.');
@@ -201,6 +258,18 @@ export const updateQuoteStatus = async (accessToken, tenantId, quoteId, status) 
   }
 };
 
+/**
+ * Creates a new project in Xero with optional quote and deal references
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {Object} projectData - Project data including contactId, name, estimateAmount, deadline
+ * @param {string} [quoteId] - Optional Xero quote ID for linking
+ * @param {string} [dealId] - Optional Pipedrive deal ID for reference
+ * @param {string} [pipedriveCompanyId] - Optional Pipedrive company ID for reference
+ * @returns {Promise<Object>} Created project object
+ * @throws {Error} When required fields missing or project creation fails
+ */
 export const createXeroProject = async (accessToken, tenantId, projectData, quoteId = null, dealId = null, pipedriveCompanyId = null) => {
   const { contactId, name, estimateAmount, deadline } = projectData;
 
@@ -208,15 +277,13 @@ export const createXeroProject = async (accessToken, tenantId, projectData, quot
     throw new Error('Contact ID and project name are required for creating a Xero project.');
   }
 
-  // Xero Projects API expects specific field names in Pascal case
   const projectPayload = {
     ContactId: contactId,
     Name: name,
     ...(estimateAmount && { EstimateAmount: parseFloat(estimateAmount) }),
-    ...(deadline && { Deadline: deadline }) // Format should be YYYY-MM-DD
+    ...(deadline && { Deadline: deadline })
   };
 
-  // Add reference to link back to Pipedrive deal if provided
   if (dealId && pipedriveCompanyId) {
     projectPayload.Reference = `Pipedrive Deal ID: ${dealId} (Company: ${pipedriveCompanyId})`;
   }
@@ -229,7 +296,7 @@ export const createXeroProject = async (accessToken, tenantId, projectData, quot
   try {
     const response = await axios.post(
       'https://api.xero.com/projects.xro/2.0/projects',
-      projectPayload, // Send payload directly, not wrapped in array
+      projectPayload,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -240,27 +307,15 @@ export const createXeroProject = async (accessToken, tenantId, projectData, quot
       }
     );
     
-    return response.data; // Return the project data directly
+    return response.data;
   } catch (error) {
     if (error.response) {
-      // Check for specific error types
-      if (error.response.status === 401) {
-        // AUTHENTICATION ERROR: Token may be invalid or expired
-      } else if (error.response.status === 403) {
-        // AUTHORIZATION ERROR: Missing permissions or scopes
-      } else if (error.response.status === 404) {
-        // ENDPOINT ERROR: API endpoint not found - check URL
-      } else if (error.response.status === 400) {
-        // BAD REQUEST ERROR: Invalid data sent to API
-      }
+      console.error('Xero API Error:', error.response.status, error.response.data);
     } else if (error.request) {
-      console.error('NO RESPONSE ERROR: Request was made but no response received');
-      console.error('Request details:', error.request);
+      console.error('Network Error: No response received from Xero API');
     } else {
-      console.error('REQUEST SETUP ERROR:', error.message);
+      console.error('Request Setup Error:', error.message);
     }
-    
-    console.error('=== END ERROR DETAILS ===');
     
     if (error.response && error.response.data && error.response.data.Elements) {
       throw {
