@@ -36,6 +36,21 @@
  */
 
 /**
+ * @typedef {Object} AuthToken
+ * @property {string} companyId - Pipedrive company ID
+ * @property {string} service - Service name ('pipedrive' or 'xero')
+ * @property {string} encryptedAccessToken - Encrypted access token
+ * @property {string} encryptedRefreshToken - Encrypted refresh token
+ * @property {string} apiDomain - API domain for the service
+ * @property {string} tenantId - Xero tenant ID (for Xero tokens only)
+ * @property {Date} tokenExpiresAt - Token expiration timestamp
+ * @property {Date} createdAt - Token creation timestamp
+ * @property {Date} lastUsedAt - Last time token was used
+ * @property {boolean} isActive - Whether the token is currently active
+ * @property {ObjectId} [_id] - MongoDB's default unique identifier
+ */
+
+/**
  * MongoDB schema validation for project_sequences collection
  */
 export const ProjectSequenceSchema = {
@@ -151,6 +166,81 @@ export const DealProjectMappingSchema = {
 };
 
 /**
+ * MongoDB schema validation for auth_tokens collection
+ */
+export const AuthTokenSchema = {
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["companyId", "service", "encryptedAccessToken", "tokenExpiresAt", "createdAt", "isActive"],
+      properties: {
+        companyId: {
+          bsonType: "string",
+          minLength: 1,
+          description: "Must be a valid Pipedrive company ID"
+        },
+        service: {
+          bsonType: "string",
+          enum: ["pipedrive", "xero"],
+          description: "Must be either 'pipedrive' or 'xero'"
+        },
+        encryptedAccessToken: {
+          bsonType: "string",
+          minLength: 1,
+          description: "Encrypted access token"
+        },
+        encryptedRefreshToken: {
+          bsonType: "string",
+          description: "Encrypted refresh token"
+        },
+        apiDomain: {
+          bsonType: "string",
+          description: "API domain for the service"
+        },
+        tenantId: {
+          bsonType: "string",
+          description: "Xero tenant ID (required for Xero tokens)"
+        },
+        tokenExpiresAt: {
+          bsonType: "date",
+          description: "Token expiration timestamp"
+        },
+        createdAt: {
+          bsonType: "date",
+          description: "Token creation timestamp"
+        },
+        lastUsedAt: {
+          bsonType: "date",
+          description: "Last time token was accessed"
+        },
+        isActive: {
+          bsonType: "bool",
+          description: "Whether the token is currently active"
+        }
+      }
+    }
+  },
+  indexes: [
+    {
+      key: { companyId: 1, service: 1 },
+      options: { unique: true, name: "company_service_unique" }
+    },
+    {
+      key: { tokenExpiresAt: 1 },
+      options: { name: "token_expiry_index" }
+    },
+    {
+      key: { lastUsedAt: 1 },
+      options: { name: "last_used_index" }
+    },
+    {
+      key: { isActive: 1 },
+      options: { name: "active_tokens_index" }
+    }
+  ]
+};
+
+/**
  * Collection configuration with schema validation
  */
 export const CollectionConfigs = {
@@ -161,6 +251,10 @@ export const CollectionConfigs = {
   deal_project_mappings: {
     name: 'deal_project_mappings',
     schema: DealProjectMappingSchema
+  },
+  auth_tokens: {
+    name: 'auth_tokens',
+    schema: AuthTokenSchema
   }
 };
 
@@ -182,36 +276,49 @@ export async function ensureCollection(db, collectionName) {
     const collections = await db.listCollections({ name: collectionName }).toArray();
     
     if (collections.length === 0) {
-      // Create collection with validation
-      await db.createCollection(collectionName, config.schema);
+      // Create collection with validation only (MongoDB Atlas doesn't allow indexes in create command)
+      const createOptions = {
+        validator: config.schema.validator
+      };
+      
+      await db.createCollection(collectionName, createOptions);
       console.log(`Created collection '${collectionName}' with schema validation`);
     } else {
       // Update validation rules for existing collection
-      await db.command({
-        collMod: collectionName,
-        validator: config.schema.validator
-      });
-      console.log(`Updated schema validation for collection '${collectionName}'`);
+      try {
+        await db.command({
+          collMod: collectionName,
+          validator: config.schema.validator
+        });
+        console.log(`Updated schema validation for collection '${collectionName}'`);
+      } catch (modError) {
+        console.warn(`Could not update validation for '${collectionName}':`, modError.message);
+      }
     }
 
-    // Ensure indexes
+    // Ensure indexes separately (required for MongoDB Atlas)
     const collection = db.collection(collectionName);
-    for (const indexDef of config.schema.indexes) {
-      try {
-        await collection.createIndex(indexDef.key, indexDef.options);
-      } catch (indexError) {
-        if (indexError.codeName === 'IndexOptionsConflict' || 
-            indexError.message.includes('already exists')) {
-          console.warn(`Index ${indexDef.options.name} already exists for ${collectionName}`);
-        } else {
-          throw indexError;
+    if (config.schema.indexes && config.schema.indexes.length > 0) {
+      for (const indexDef of config.schema.indexes) {
+        try {
+          await collection.createIndex(indexDef.key, indexDef.options);
+          console.log(`Created index '${indexDef.options.name}' for collection '${collectionName}'`);
+        } catch (indexError) {
+          if (indexError.codeName === 'IndexOptionsConflict' || 
+              indexError.codeName === 'IndexKeySpecsConflict' ||
+              indexError.message.includes('already exists')) {
+            console.log(`Index '${indexDef.options.name}' already exists for '${collectionName}'`);
+          } else {
+            console.error(`Failed to create index '${indexDef.options.name}' for '${collectionName}':`, indexError.message);
+            // Don't throw here, continue with other indexes
+          }
         }
       }
     }
 
     return collection;
   } catch (error) {
-    console.error(`Error ensuring collection ${collectionName}:`, error);
+    console.error(`Error ensuring collection ${collectionName}:`, error.message);
     throw error;
   }
 }

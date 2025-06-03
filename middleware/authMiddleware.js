@@ -4,7 +4,7 @@
  * and automatically redirect to auth flows when tokens are missing or expired.
  */
 
-import * as tokenService from '../services/tokenService.js';
+import * as tokenService from '../services/secureTokenService.js';
 
 /**
  * Middleware to check and refresh Pipedrive authentication for a company.
@@ -29,12 +29,12 @@ export const requirePipedriveAuth = async (req, res, next) => {
     }
 
     try {
-        let companyTokens = tokenService.allCompanyTokens[companyId];
+        const tokenData = await tokenService.getAuthToken(companyId, 'pipedrive');
         
-        if (!companyTokens || !companyTokens.accessToken) {
+        if (!tokenData || !tokenData.accessToken) {
             req.log.warn('Pipedrive not authenticated for company', {
                 companyId,
-                hasTokens: !!companyTokens
+                hasTokens: !!tokenData
             });
             
             return res.status(401).json({
@@ -48,12 +48,19 @@ export const requirePipedriveAuth = async (req, res, next) => {
         }
 
         // Check if token needs refresh
-        if (Date.now() >= companyTokens.tokenExpiresAt) {
+        if (Date.now() >= tokenData.tokenExpiresAt) {
             req.log.info('Refreshing expired Pipedrive token', { companyId });
             
             try {
-                companyTokens = await tokenService.refreshPipedriveToken(companyId);
+                const refreshedToken = await tokenService.refreshPipedriveToken(companyId);
                 req.log.info('Successfully refreshed Pipedrive token', { companyId });
+                
+                // Attach refreshed tokens to request
+                req.pipedriveAuth = {
+                    accessToken: refreshedToken.accessToken,
+                    apiDomain: refreshedToken.apiDomain,
+                    companyId: companyId
+                };
             } catch (refreshError) {
                 req.log.error('Failed to refresh Pipedrive token', {
                     companyId,
@@ -69,14 +76,14 @@ export const requirePipedriveAuth = async (req, res, next) => {
                     authUrl: `http://localhost:3000/auth?companyId=${companyId}`
                 });
             }
+        } else {
+            // Attach tokens to request for use in controllers
+            req.pipedriveAuth = {
+                accessToken: tokenData.accessToken,
+                apiDomain: tokenData.apiDomain,
+                companyId: companyId
+            };
         }
-
-        // Attach tokens to request for use in controllers
-        req.pipedriveAuth = {
-            accessToken: companyTokens.accessToken,
-            apiDomain: companyTokens.apiDomain,
-            companyId: companyId
-        };
 
         next();
 
@@ -114,21 +121,28 @@ export const optionalXeroAuth = async (req, res, next) => {
     }
 
     try {
-        let xeroTokens = tokenService.allXeroTokens[companyId];
+        const tokenData = await tokenService.getAuthToken(companyId, 'xero');
         
-        if (!xeroTokens || !xeroTokens.accessToken) {
+        if (!tokenData || !tokenData.accessToken) {
             req.log.info('Xero not connected for company', { companyId });
             req.xeroAuth = null;
             return next();
         }
 
         // Check if token needs refresh
-        if (Date.now() >= xeroTokens.tokenExpiresAt) {
+        if (Date.now() >= tokenData.tokenExpiresAt) {
             req.log.info('Refreshing expired Xero token', { companyId });
             
             try {
-                xeroTokens = await tokenService.refreshXeroToken(companyId);
+                const refreshedToken = await tokenService.refreshXeroToken(companyId);
                 req.log.info('Successfully refreshed Xero token', { companyId });
+                
+                // Attach refreshed tokens to request
+                req.xeroAuth = {
+                    accessToken: refreshedToken.accessToken,
+                    tenantId: refreshedToken.tenantId,
+                    companyId: companyId
+                };
             } catch (refreshError) {
                 req.log.warn('Failed to refresh Xero token', {
                     companyId,
@@ -137,14 +151,14 @@ export const optionalXeroAuth = async (req, res, next) => {
                 req.xeroAuth = null;
                 return next();
             }
+        } else {
+            // Attach Xero tokens to request for use in controllers
+            req.xeroAuth = {
+                accessToken: tokenData.accessToken,
+                tenantId: tokenData.tenantId,
+                companyId: companyId
+            };
         }
-
-        // Attach Xero tokens to request for use in controllers
-        req.xeroAuth = {
-            accessToken: xeroTokens.accessToken,
-            tenantId: xeroTokens.tenantId,
-            companyId: companyId
-        };
 
         next();
 
@@ -196,35 +210,47 @@ export const checkAuthRequirements = async (req, res, next) => {
         });
     }
 
-    const pipedriveTokens = tokenService.allCompanyTokens[companyId];
-    const xeroTokens = tokenService.allXeroTokens[companyId];
-    const currentTime = Date.now();
+    try {
+        const pipedriveToken = await tokenService.getAuthToken(companyId, 'pipedrive');
+        const xeroToken = await tokenService.getAuthToken(companyId, 'xero');
+        const currentTime = Date.now();
 
-    const authStatus = {
-        companyId,
-        pipedrive: {
-            required: true,
-            authenticated: !!(pipedriveTokens && pipedriveTokens.accessToken),
-            expired: pipedriveTokens ? currentTime >= pipedriveTokens.tokenExpiresAt : true,
-            authUrl: `/auth?companyId=${companyId}`
-        },
-        xero: {
-            required: false,
-            authenticated: !!(xeroTokens && xeroTokens.accessToken),
-            expired: xeroTokens ? currentTime >= xeroTokens.tokenExpiresAt : true,
-            authUrl: `/auth/connect-xero?pipedriveCompanyId=${companyId}`
-        }
-    };
+        const authStatus = {
+            companyId,
+            pipedrive: {
+                required: true,
+                authenticated: !!(pipedriveToken && pipedriveToken.accessToken),
+                expired: pipedriveToken ? currentTime >= pipedriveToken.tokenExpiresAt : true,
+                authUrl: `/auth?companyId=${companyId}`
+            },
+            xero: {
+                required: false,
+                authenticated: !!(xeroToken && xeroToken.accessToken),
+                expired: xeroToken ? currentTime >= xeroToken.tokenExpiresAt : true,
+                authUrl: `/auth/connect-xero?pipedriveCompanyId=${companyId}`
+            }
+        };
 
-    // Determine if any auth is required
-    const authRequired = !authStatus.pipedrive.authenticated || authStatus.pipedrive.expired;
+        // Determine if any auth is required
+        const authRequired = !authStatus.pipedrive.authenticated || authStatus.pipedrive.expired;
 
-    res.json({
-        success: true,
-        authRequired,
-        authStatus,
-        message: authRequired 
-            ? 'Authentication required to proceed'
-            : 'All required authentication is available'
-    });
+        res.json({
+            success: true,
+            authRequired,
+            authStatus,
+            message: authRequired 
+                ? 'Authentication required to proceed'
+                : 'All required authentication is available'
+        });
+    } catch (error) {
+        req.log.error('Error checking auth requirements', {
+            companyId,
+            error: error.message
+        });
+        
+        res.status(500).json({
+            success: false,
+            error: 'Failed to check authentication requirements'
+        });
+    }
 };

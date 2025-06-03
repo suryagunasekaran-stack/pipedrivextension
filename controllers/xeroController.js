@@ -4,7 +4,7 @@
  * linked to Pipedrive deals and products.
  */
 
-import * as tokenService from '../services/tokenService.js';
+import * as tokenService from '../services/secureTokenService.js';
 import * as pipedriveApiService from '../services/pipedriveApiService.js';
 import * as xeroApiService from '../services/xeroApiService.js';
 import { v4 as uuidv4 } from 'uuid';

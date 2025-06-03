@@ -5,7 +5,7 @@
  */
 
 import 'dotenv/config';
-import * as tokenService from '../services/tokenService.js';
+import * as tokenService from '../services/secureTokenService.js';
 import * as pipedriveApiService from '../services/pipedriveApiService.js';
 
 const pipedriveClientId = process.env.CLIENT_ID;

@@ -16,7 +16,7 @@
  * @module utils/projectHelpers
  */
 
-import * as tokenService from '../services/tokenService.js';
+import * as tokenService from '../services/secureTokenService.js';
 import * as pipedriveApiService from '../services/pipedriveApiService.js';
 import * as xeroApiService from '../services/xeroApiService.js';
 import { getNextProjectNumber } from '../models/projectSequenceModel.js';

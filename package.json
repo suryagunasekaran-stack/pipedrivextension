@@ -14,7 +14,8 @@
     "test:reset": "NODE_ENV=test node scripts/testCleanup.js reset",
     "test:generate": "NODE_ENV=test node scripts/testCleanup.js generate",
     "test:validate": "NODE_ENV=test node scripts/testCleanup.js validate",
-    "test:stats": "NODE_ENV=test node scripts/testCleanup.js stats"
+    "test:stats": "NODE_ENV=test node scripts/testCleanup.js stats",
+    "migrate-tokens": "node scripts/migrateTokens.js"
   },
   "dependencies": {
     "axios": "^1.7.2",
