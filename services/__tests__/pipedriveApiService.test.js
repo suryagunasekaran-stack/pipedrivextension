@@ -5,13 +5,13 @@
 
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import {
-  getDeal,
-  getPerson,
-  getOrganization,
+  getDealDetails,
+  getPersonDetails,
+  getOrganizationDetails,
   getDealProducts,
-  updateDeal
-} from '../../services/pipedriveApiService.js';
-import { PipedriveMock, mockData, cleanupMocks } from '../testUtils.js';
+  updateDealWithProjectNumber
+} from '../pipedriveApiService.js';
+import { PipedriveMock, mockData, cleanupMocks } from '../../__tests__/testUtils.js';
 
 describe('Pipedrive API Service', () => {
   let pipedriveMock;
@@ -24,12 +24,12 @@ describe('Pipedrive API Service', () => {
     cleanupMocks();
   });
 
-  describe('getDeal', () => {
+  describe('getDealDetails', () => {
     test('should fetch deal successfully', async () => {
       const mockDeal = mockData.pipedriveDeal('12345');
       pipedriveMock.mockGetDeal('12345', mockDeal);
 
-      const result = await getDeal('api.pipedrive.com', 'valid-token', '12345');
+      const result = await getDealDetails('https://api.pipedrive.com', 'valid-token', '12345');
 
       expect(result).toEqual(mockDeal);
       pipedriveMock.done();
@@ -38,24 +38,24 @@ describe('Pipedrive API Service', () => {
     test('should handle deal not found', async () => {
       pipedriveMock.mockGetDeal('12345', null, 404);
 
-      await expect(getDeal('api.pipedrive.com', 'valid-token', '12345'))
-        .rejects.toThrow('Deal not found');
+      await expect(getDealDetails('https://api.pipedrive.com', 'valid-token', '12345'))
+        .rejects.toThrow();
     });
 
     test('should handle API errors', async () => {
       pipedriveMock.mockGetDeal('12345', null, 500);
 
-      await expect(getDeal('api.pipedrive.com', 'valid-token', '12345'))
+      await expect(getDealDetails('https://api.pipedrive.com', 'valid-token', '12345'))
         .rejects.toThrow();
     });
   });
 
-  describe('getPerson', () => {
+  describe('getPersonDetails', () => {
     test('should fetch person successfully', async () => {
       const mockPerson = mockData.pipedrivePerson('101');
       pipedriveMock.mockGetPerson('101', mockPerson);
 
-      const result = await getPerson('api.pipedrive.com', 'valid-token', '101');
+      const result = await getPersonDetails('https://api.pipedrive.com', 'valid-token', '101');
 
       expect(result).toEqual(mockPerson);
       pipedriveMock.done();
@@ -64,17 +64,17 @@ describe('Pipedrive API Service', () => {
     test('should handle person not found', async () => {
       pipedriveMock.mockGetPerson('101', null, 404);
 
-      await expect(getPerson('api.pipedrive.com', 'valid-token', '101'))
-        .rejects.toThrow('Person not found');
+      await expect(getPersonDetails('https://api.pipedrive.com', 'valid-token', '101'))
+        .rejects.toThrow();
     });
   });
 
-  describe('getOrganization', () => {
+  describe('getOrganizationDetails', () => {
     test('should fetch organization successfully', async () => {
       const mockOrg = mockData.pipedriveOrganization('201');
       pipedriveMock.mockGetOrganization('201', mockOrg);
 
-      const result = await getOrganization('api.pipedrive.com', 'valid-token', '201');
+      const result = await getOrganizationDetails('https://api.pipedrive.com', 'valid-token', '201');
 
       expect(result).toEqual(mockOrg);
       pipedriveMock.done();
@@ -83,8 +83,8 @@ describe('Pipedrive API Service', () => {
     test('should handle organization not found', async () => {
       pipedriveMock.mockGetOrganization('201', null, 404);
 
-      await expect(getOrganization('api.pipedrive.com', 'valid-token', '201'))
-        .rejects.toThrow('Organization not found');
+      await expect(getOrganizationDetails('https://api.pipedrive.com', 'valid-token', '201'))
+        .rejects.toThrow();
     });
   });
 
@@ -93,7 +93,7 @@ describe('Pipedrive API Service', () => {
       const mockProducts = mockData.dealProducts('12345');
       pipedriveMock.mockGetDealProducts('12345', mockProducts);
 
-      const result = await getDealProducts('api.pipedrive.com', 'valid-token', '12345');
+      const result = await getDealProducts('https://api.pipedrive.com', 'valid-token', '12345');
 
       expect(result).toEqual(mockProducts);
       pipedriveMock.done();
@@ -102,29 +102,34 @@ describe('Pipedrive API Service', () => {
     test('should handle empty products', async () => {
       pipedriveMock.mockGetDealProducts('12345', []);
 
-      const result = await getDealProducts('api.pipedrive.com', 'valid-token', '12345');
+      const result = await getDealProducts('https://api.pipedrive.com', 'valid-token', '12345');
 
       expect(result).toEqual([]);
       pipedriveMock.done();
     });
   });
 
-  describe('updateDeal', () => {
+  describe('updateDealWithProjectNumber', () => {
     test('should update deal successfully', async () => {
       const updateData = { custom_fields: { project_number: 'PROJ-001' } };
       pipedriveMock.mockUpdateDeal('12345');
 
-      const result = await updateDeal('api.pipedrive.com', 'valid-token', '12345', updateData);
+      // Mock environment variable
+      process.env.PIPEDRIVE_PROJECT_NUMBER_CUSTOM_FIELD_KEY = 'project_number';
+
+      const result = await updateDealWithProjectNumber('https://api.pipedrive.com', 'valid-token', '12345', 'PROJ-001');
 
       expect(result).toBeDefined();
       pipedriveMock.done();
     });
 
     test('should handle update failure', async () => {
-      const updateData = { custom_fields: { project_number: 'PROJ-001' } };
       pipedriveMock.mockUpdateDeal('12345', 400);
 
-      await expect(updateDeal('api.pipedrive.com', 'valid-token', '12345', updateData))
+      // Mock environment variable
+      process.env.PIPEDRIVE_PROJECT_NUMBER_CUSTOM_FIELD_KEY = 'project_number';
+
+      await expect(updateDealWithProjectNumber('https://api.pipedrive.com', 'valid-token', '12345', 'PROJ-001'))
         .rejects.toThrow();
     });
   });

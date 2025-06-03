@@ -1,5 +1,6 @@
-module.exports = {
+export default {
   testEnvironment: 'node',
+  transform: {},
   testMatch: [
     '**/__tests__/**/*.test.js'
   ],
@@ -14,5 +15,6 @@ module.exports = {
     '!**/node_modules/**'
   ],
   coverageDirectory: 'coverage',
-  coverageReporters: ['text', 'lcov', 'html']
-};
+  coverageReporters: ['text', 'lcov', 'html'],
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js']
+}; 

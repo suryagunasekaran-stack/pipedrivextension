@@ -3,30 +3,12 @@
  * This allows testing without making real API calls and handles OAuth flows
  */
 
-const nock = require('nock');
+import nock from 'nock';
+import { jest } from '@jest/globals';
 
 // Simple mock function for ES modules environment
 const mockFn = (returnValue) => {
-  const fn = (...args) => {
-    fn.calls.push(args);
-    fn.lastCall = args;
-    return returnValue;
-  };
-  fn.calls = [];
-  fn.lastCall = null;
-  fn.mockReturnValue = (value) => {
-    fn.returnValue = value;
-    return fn;
-  };
-  fn.mockResolvedValue = (value) => {
-    fn.returnValue = Promise.resolve(value);
-    return fn;
-  };
-  fn.mockRejectedValue = (value) => {
-    fn.returnValue = Promise.reject(value);
-    return fn;
-  };
-  return fn;
+  return jest.fn().mockReturnValue(returnValue);
 };
 
 /**
@@ -39,17 +21,15 @@ const mockData = {
     value: 10000,
     currency: 'USD',
     stage_id: 1,
-    person_id: 101,
-    org_id: 201,
+    person_id: { value: 101 },
+    org_id: { value: 201 },
     status: 'open',
     expected_close_date: '2025-12-31',
-    custom_fields: {
-      department: 'Engineering',
-      vessel: 'Test Vessel',
-      person_in_charge: 'John Doe',
-      location: 'Test Location',
-      ...customFields
-    },
+    custom_fields: 'Engineering',
+    department: 'Engineering',
+    vessel: 'Test Vessel',
+    person_in_charge: 'John Doe',
+    location: 'Test Location',
     ...customFields
   }),
 
@@ -297,13 +277,13 @@ const createMockRequest = (overrides = {}) => ({
   pipedriveAuth: null,
   xeroAuth: null,
   log: {
-    info: mockFn(),
-    error: mockFn(),
-    warn: mockFn(),
-    debug: mockFn()
+    info: jest.fn(),
+    error: jest.fn(),
+    warn: jest.fn(),
+    debug: jest.fn()
   },
   id: 'test-request-id',
-  get: mockFn(() => 'Test User Agent'),
+  get: jest.fn(() => 'Test User Agent'),
   ...overrides
 });
 
@@ -312,12 +292,28 @@ const createMockRequest = (overrides = {}) => ({
  */
 const createMockResponse = () => {
   const res = {
-    status: mockFn(() => res),
-    json: mockFn(() => res),
-    send: mockFn(() => res),
-    cookie: mockFn(() => res),
-    redirect: mockFn(() => res)
+    statusCode: 200,
+    data: null
   };
+  
+  res.status = jest.fn((code) => {
+    res.statusCode = code;
+    return res;
+  });
+  
+  res.json = jest.fn((data) => {
+    res.data = data;
+    return res;
+  });
+  
+  res.send = jest.fn((data) => {
+    res.data = data;
+    return res;
+  });
+  
+  res.cookie = jest.fn(() => res);
+  res.redirect = jest.fn(() => res);
+  
   return res;
 };
 
@@ -326,8 +322,8 @@ const cleanupMocks = () => {
   nock.cleanAll();
 };
 
-// Export all utilities
-module.exports = {
+// Export all utilities using ES modules syntax
+export {
   mockData,
   PipedriveMock,
   XeroMock,
@@ -337,4 +333,4 @@ module.exports = {
   createMockResponse,
   cleanupMocks,
   mockFn
-};
+}; 

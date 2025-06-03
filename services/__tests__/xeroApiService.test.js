@@ -9,8 +9,8 @@ import {
   createXeroContact,
   createXeroProject,
   getXeroProjects
-} from '../../services/xeroApiService.js';
-import { XeroMock, mockData, cleanupMocks } from '../testUtils.js';
+} from '../xeroApiService.js';
+import { XeroMock, mockData, cleanupMocks } from '../../__tests__/testUtils.js';
 
 describe('Xero API Service', () => {
   let xeroMock;
