@@ -101,7 +101,6 @@ export const updateDealWithQuoteNumber = async (apiDomain, accessToken, dealId, 
         },
       }
     );
-    console.log('Pipedrive deal updated successfully with Xero quote number:', response.data);
     return response.data;
   } catch (error) {
     console.error(
@@ -137,7 +136,6 @@ export const updateDealWithProjectNumber = async (apiDomain, accessToken, dealId
         },
       }
     );
-    console.log(`Pipedrive deal ${dealId} updated successfully with project number ${projectNumber}:`, response.data);
     return response.data;
   } catch (error) {
     console.error(

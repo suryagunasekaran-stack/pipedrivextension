@@ -11,7 +11,6 @@ export async function connectToDatabase() {
   const client = new MongoClient(process.env.MONGODB_URI);
   await client.connect();
   db = client.db(); // By default, uses the database specified in the MONGODB_URI
-  console.log('Successfully connected to MongoDB.');
 
   // Ensure indexes for project_sequences (counters)
   try {
@@ -20,12 +19,11 @@ export async function connectToDatabase() {
       { departmentCode: 1, year: 1 },
       { unique: true }
     );
-    console.log('Unique index on project_sequences (departmentCode, year) ensured.');
   } catch (indexError) {
     if (indexError.codeName === 'IndexOptionsConflict' || indexError.codeName === 'IndexKeySpecsConflict') {
       console.warn('Index on project_sequences already exists with different options or key specs. Manual review might be needed.');
     } else if (indexError.codeName === 'NamespaceExists' || indexError.message.includes('already exists')) {
-        console.log('Index on project_sequences (departmentCode, year) likely already exists.');
+        // Index on project_sequences (departmentCode, year) likely already exists.
     } else {
       console.error('Error creating index for project_sequences:', indexError);
     }
@@ -39,19 +37,17 @@ export async function connectToDatabase() {
     await dealProjectMappingsCollection.createIndex(
       { pipedriveDealIds: 1 }
     );
-    console.log('Index on deal_project_mappings (pipedriveDealIds) ensured.');
     
     // Unique index on projectNumber
     await dealProjectMappingsCollection.createIndex(
       { projectNumber: 1 },
       { unique: true }
     );
-    console.log('Unique index on deal_project_mappings (projectNumber) ensured.');
   } catch (indexError) {
     if (indexError.codeName === 'IndexOptionsConflict' || indexError.codeName === 'IndexKeySpecsConflict') {
       console.warn('Index on deal_project_mappings already exists with different options or key specs. Manual review might be needed.');
     } else if (indexError.codeName === 'NamespaceExists' || indexError.message.includes('already exists')) {
-        console.log('Index on deal_project_mappings already exists.');
+        // Index on deal_project_mappings already exists.
     } else {
       console.error('Error creating index for deal_project_mappings:', indexError);
     }

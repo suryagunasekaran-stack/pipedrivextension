@@ -22,7 +22,6 @@ export const handlePipedriveAction = async (req, res) => {
 
     if (Date.now() >= companyTokens.tokenExpiresAt) {
         try {
-            console.log(`Pipedrive token expired for ${companyId}, attempting refresh.`);
             companyTokens = await tokenService.refreshPipedriveToken(companyId);
         } catch (refreshError) {
             console.error(`Failed to refresh Pipedrive token for company ${companyId}:`, refreshError.message);
@@ -52,7 +51,6 @@ export const handlePipedriveAction = async (req, res) => {
     if (dealId && companyId) {
         return res.redirect(`${frontendRedirectUrl}?dealId=${dealId}&companyId=${companyId}&uiAction=${uiAction || 'createQuote'}`);
     } else if (companyId) {
-        console.log(`Redirecting for company ${companyId} (action: ${uiAction || 'default'}), but dealId is missing. Ensure this is handled by the frontend or action type.`);
         return res.redirect(`${frontendRedirectUrl}?companyId=${companyId}&uiAction=${uiAction || 'createQuote'}`);
     } else {
         return res.status(400).send('Cannot redirect: Missing critical parameters (dealId or companyId).');
@@ -73,7 +71,6 @@ export const createProject = async (req, res) => {
 
     if (Date.now() >= companyTokens.tokenExpiresAt) {
         try {
-            console.log(`Pipedrive token expired for ${companyId} in createProject, attempting refresh.`);
             companyTokens = await tokenService.refreshPipedriveToken(companyId);
         } catch (refreshError) {
             console.error(`Failed to refresh Pipedrive token for ${companyId} in createProject:`, refreshError.message);
@@ -146,7 +143,6 @@ export const getPipedriveData = async (req, res) => {
 
     if (Date.now() >= companyTokens.tokenExpiresAt) {
         try {
-            console.log(`Pipedrive token expired for ${companyId} in /api/pipedrive-data, attempting refresh.`);
             companyTokens = await tokenService.refreshPipedriveToken(companyId);
         } catch (refreshError) {
             console.error(`Failed to refresh Pipedrive token for ${companyId} in /api/pipedrive-data:`, refreshError.message);

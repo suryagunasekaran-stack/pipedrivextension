@@ -65,7 +65,6 @@ export const handlePipedriveCallback = async (req, res) => {
 
         await tokenService.saveAllTokensToFile();
 
-        console.log(`Tokens stored for company ${companyIdForTokenStorage}`);
         res.send(`<h1>Authentication Successful for Company ID: ${companyIdForTokenStorage}!</h1><p>Tokens stored. You can now use the app action.</p>`);
 
     } catch (error) {
@@ -147,7 +146,6 @@ export const handleXeroCallback = async (req, res) => {
 
         await tokenService.saveAllXeroTokensToFile();
 
-        console.log(`Xero tokens stored for Pipedrive Company ID ${pipedriveCompanyId}, Xero Tenant ID: ${tenantId}`);
         res.send(`<h1>Xero Authentication Successful for Pipedrive Company ID: ${pipedriveCompanyId}!</h1><p>Xero Tenant ID: ${tenantId}. You can close this window.</p>`);
 
     } catch (error) {

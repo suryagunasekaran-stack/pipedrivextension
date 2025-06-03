@@ -32,7 +32,8 @@ async function startServer() {
     await loadAllXeroTokensFromFile(); // Load Xero tokens
     
     app.listen(port, () => {
-        console.log(`Server running on port http://localhost:${port}`);
+        // Server running on port
+        console.log(`Server is running on http://localhost:${port}`);
     });
 }
 

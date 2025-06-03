@@ -96,7 +96,6 @@ export const createXeroContact = async (accessToken, tenantId, contactPayload) =
         },
       }
     );
-    console.log('Xero contact created/updated successfully:', response.data.Contacts[0]);
     return response.data.Contacts[0]; // Return the first created/updated contact object
   } catch (error) {
     console.error(
@@ -135,7 +134,6 @@ export const createQuote = async (accessToken, tenantId, quotePayload, idempoten
       { Quotes: [finalQuotePayload] }, // Use the payload with the reference
       { headers }
     );
-    console.log('Xero quote created successfully:', response.data);
     // Assuming response.data.Quotes[0] is the created quote
     return response.data.Quotes[0]; 
   } catch (error) {
@@ -185,7 +183,6 @@ export const updateQuoteStatus = async (accessToken, tenantId, quoteId, status) 
       }
     );
     
-    console.log(`Xero quote ${quoteId} status updated to ${status} successfully:`, response.data);
     return response.data.Quotes[0];
   } catch (error) {
     console.error(
@@ -205,26 +202,9 @@ export const updateQuoteStatus = async (accessToken, tenantId, quoteId, status) 
 };
 
 export const createXeroProject = async (accessToken, tenantId, projectData, quoteId = null, dealId = null, pipedriveCompanyId = null) => {
-  console.log('=== DEBUG: createXeroProject function called ===');
-  console.log('accessToken (first 20 chars):', accessToken ? accessToken.substring(0, 20) + '...' : 'MISSING');
-  console.log('tenantId:', tenantId);
-  console.log('projectData (full object):', JSON.stringify(projectData, null, 2));
-  console.log('quoteId:', quoteId);
-  console.log('dealId:', dealId);
-  console.log('pipedriveCompanyId:', pipedriveCompanyId);
-  
   const { contactId, name, estimateAmount, deadline } = projectData;
-  
-  console.log('=== DEBUG: After destructuring ===');
-  console.log('contactId:', contactId);
-  console.log('name:', name);
-  console.log('estimateAmount:', estimateAmount);
-  console.log('deadline:', deadline);
 
   if (!contactId || !name) {
-    console.error('=== VALIDATION ERROR ===');
-    console.error('contactId is missing:', !contactId);
-    console.error('name is missing:', !name);
     throw new Error('Contact ID and project name are required for creating a Xero project.');
   }
 
@@ -247,19 +227,6 @@ export const createXeroProject = async (accessToken, tenantId, projectData, quot
   }
 
   try {
-    console.log('=== XERO PROJECT CREATION ATTEMPT ===');
-    console.log('Final projectPayload object:', JSON.stringify(projectPayload, null, 2));
-    console.log('ContactId value:', JSON.stringify(projectPayload.ContactId));
-    console.log('Name value:', JSON.stringify(projectPayload.Name));
-    console.log('Endpoint:', 'https://api.xero.com/projects.xro/2.0/projects');
-    
-    // Double-check the payload structure
-    console.log('=== FINAL PAYLOAD VALIDATION ===');
-    console.log('Is ContactId present?', !!projectPayload.ContactId);
-    console.log('Is Name present?', !!projectPayload.Name);
-    console.log('ContactId type:', typeof projectPayload.ContactId);
-    console.log('Name type:', typeof projectPayload.Name);
-    
     const response = await axios.post(
       'https://api.xero.com/projects.xro/2.0/projects',
       projectPayload, // Send payload directly, not wrapped in array
@@ -273,28 +240,18 @@ export const createXeroProject = async (accessToken, tenantId, projectData, quot
       }
     );
     
-    console.log('Xero project created successfully:', response.data);
     return response.data; // Return the project data directly
   } catch (error) {
-    console.error('=== XERO PROJECT CREATION ERROR ===');
-    console.error('Error type:', typeof error);
-    console.error('Error message:', error.message);
-    
     if (error.response) {
-      console.error('HTTP Status:', error.response.status);
-      console.error('Status Text:', error.response.statusText);
-      console.error('Response Headers:', JSON.stringify(error.response.headers, null, 2));
-      console.error('Response Data:', JSON.stringify(error.response.data, null, 2));
-      
       // Check for specific error types
       if (error.response.status === 401) {
-        console.error('AUTHENTICATION ERROR: Token may be invalid or expired');
+        // AUTHENTICATION ERROR: Token may be invalid or expired
       } else if (error.response.status === 403) {
-        console.error('AUTHORIZATION ERROR: Missing permissions or scopes');
+        // AUTHORIZATION ERROR: Missing permissions or scopes
       } else if (error.response.status === 404) {
-        console.error('ENDPOINT ERROR: API endpoint not found - check URL');
+        // ENDPOINT ERROR: API endpoint not found - check URL
       } else if (error.response.status === 400) {
-        console.error('BAD REQUEST ERROR: Invalid data sent to API');
+        // BAD REQUEST ERROR: Invalid data sent to API
       }
     } else if (error.request) {
       console.error('NO RESPONSE ERROR: Request was made but no response received');

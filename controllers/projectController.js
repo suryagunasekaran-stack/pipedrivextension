@@ -25,7 +25,6 @@ export const createFullProject = async (req, res) => {
     // Check token expiration and refresh if needed
     if (Date.now() >= companyTokens.tokenExpiresAt) {
         try {
-            console.log(`Pipedrive token expired for ${companyId} in createFullProject, attempting refresh.`);
             companyTokens = await tokenService.refreshPipedriveToken(companyId);
         } catch (refreshError) {
             console.error(`Failed to refresh Pipedrive token for ${companyId} in createFullProject:`, refreshError.message);
@@ -107,7 +106,6 @@ export const createFullProject = async (req, res) => {
                         
                         if (existingContact) {
                             xeroContactId = existingContact.ContactID;
-                            console.log(`Found existing Xero contact: ${orgDetails.name} (ID: ${xeroContactId})`);
                         } else {
                             // Create new Xero contact
                             const newContactPayload = { Name: orgDetails.name };
@@ -131,7 +129,6 @@ export const createFullProject = async (req, res) => {
                                 newContactPayload
                             );
                             xeroContactId = createdContact.ContactID;
-                            console.log(`Created new Xero contact: ${orgDetails.name} (ID: ${xeroContactId})`);
                         }
                     }
                 }
@@ -145,33 +142,6 @@ export const createFullProject = async (req, res) => {
                         estimateAmount: dealDetails.value || null,
                     };
 
-                    console.log('=== ATTEMPTING XERO PROJECT CREATION ===');
-                    console.log('Xero Access Token (first 20 chars):', currentXeroTokenInfo.accessToken.substring(0, 20) + '...');
-                    console.log('Xero Tenant ID:', currentXeroTokenInfo.tenantId);
-                    
-                    // Validate the data before sending
-                    console.log('=== PROJECT DATA VALIDATION ===');
-                    console.log('xeroContactId:', JSON.stringify(xeroContactId));
-                    console.log('projectNumber:', JSON.stringify(projectNumber));
-                    console.log('dealDetails.title:', JSON.stringify(dealDetails.title));
-                    console.log('projectName:', JSON.stringify(projectName));
-                    console.log('dealDetails.value:', JSON.stringify(dealDetails.value));
-                    console.log('Project Data being sent:', JSON.stringify(projectData, null, 2));
-                    
-                    // Double-check the structure
-                    if (!projectData.contactId || typeof projectData.contactId !== 'string') {
-                        console.error('❌ INVALID contactId:', projectData.contactId);
-                    }
-                    if (!projectData.name || typeof projectData.name !== 'string') {
-                        console.error('❌ INVALID name:', projectData.name);
-                    }
-                    if (projectData.contactId && projectData.name) {
-                        console.log('✅ Project data validation passed');
-                    }
-                    console.log('Deal ID:', dealId);
-                    console.log('Company ID:', companyId);
-                    console.log('=== CALLING createXeroProject ===');
-
                     xeroProject = await xeroApiService.createXeroProject(
                         currentXeroTokenInfo.accessToken,
                         currentXeroTokenInfo.tenantId,
@@ -180,7 +150,6 @@ export const createFullProject = async (req, res) => {
                         dealId,
                         companyId
                     );
-                    console.log('✅ Xero project created successfully:', xeroProject);
                 } else {
                     console.warn('No Xero contact available, skipping Xero project creation');
                 }
@@ -271,7 +240,6 @@ export const createFullProject = async (req, res) => {
         // 6. Update Pipedrive deal with the generated project number
         try {
             await pipedriveApiService.updateDealWithProjectNumber(apiDomain, accessToken, dealId, projectNumber);
-            console.log(`Pipedrive deal ${dealId} updated with project number ${projectNumber}`);
         } catch (updateError) {
             console.warn(`Warning: Failed to update Pipedrive deal ${dealId} with project number ${projectNumber}:`, updateError.message);
             // Continue execution even if the update fails - the project number is still generated and stored
@@ -315,7 +283,6 @@ export const createFullProject = async (req, res) => {
         };
 
         const xeroStatus = xeroProject ? 'with Xero project' : (xeroError ? `with Xero error: ${xeroError}` : 'without Xero');
-        console.log(`Project creation completed for deal ${dealId} with project number ${projectNumber} ${xeroStatus}`);
         res.status(201).json(responseData);
 
     } catch (error) {

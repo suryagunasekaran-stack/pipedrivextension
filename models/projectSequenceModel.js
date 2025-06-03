@@ -39,7 +39,6 @@ export async function getNextProjectNumber(pipedriveDealId, pipedriveDepartmentN
   // We search for the dealId within the array pipedriveDealIds.
   const dealSpecificMapping = await dealProjectMappingsCollection.findOne({ pipedriveDealIds: dealIdAsInt });
   if (dealSpecificMapping) {
-    console.log(`Deal ${pipedriveDealId} is already linked to project number ${dealSpecificMapping.projectNumber}.`);
     return dealSpecificMapping.projectNumber;
   }
 
@@ -54,7 +53,6 @@ export async function getNextProjectNumber(pipedriveDealId, pipedriveDepartmentN
       { returnDocument: 'after' }
     );
     if (result) {
-      console.log(`Successfully linked Pipedrive Deal ID ${pipedriveDealId} to existing project number ${existingProjectNumberToLink}.`);
       return result.projectNumber;
     } else {
       // existingProjectNumberToLink was not found, proceed to generate a new one for this deal
@@ -122,7 +120,6 @@ export async function getNextProjectNumber(pipedriveDealId, pipedriveDepartmentN
       });
       
       success = true; // If insertOne is successful, the number is unique and stored.
-      console.log(`Generated and stored new project number ${newProjectNumber} for deal ${pipedriveDealId}.`);
       return newProjectNumber;
 
     } catch (error) {

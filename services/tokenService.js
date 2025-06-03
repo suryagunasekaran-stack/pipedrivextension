@@ -23,7 +23,6 @@ export async function saveAllTokensToFile() {
     try {
         const data = JSON.stringify(allCompanyTokens, null, 2);
         await fs.writeFile(TOKEN_FILE_PATH, data);
-        console.log('All Pipedrive company tokens saved to file.');
     } catch (error) {
         console.error('Error saving Pipedrive company tokens to file:', error);
     }
@@ -33,10 +32,9 @@ export async function loadAllTokensFromFile() {
     try {
         const data = await fs.readFile(TOKEN_FILE_PATH);
         allCompanyTokens = JSON.parse(data);
-        console.log('All Pipedrive company tokens loaded from file.');
     } catch (error) {
         if (error.code === 'ENOENT') {
-            console.log('Pipedrive token file not found. Proceeding with empty tokens store.');
+            // Pipedrive token file not found. Proceeding with empty tokens store.
         } else {
             console.error('Error loading Pipedrive company tokens from file:', error);
         }
@@ -48,7 +46,6 @@ export async function saveAllXeroTokensToFile() {
     try {
         const data = JSON.stringify(allXeroTokens, null, 2);
         await fs.writeFile(XERO_TOKEN_FILE_PATH, data);
-        console.log('All Xero tokens saved to file.');
     } catch (error) {
         console.error('Error saving Xero tokens to file:', error);
     }
@@ -58,10 +55,9 @@ export async function loadAllXeroTokensFromFile() {
     try {
         const data = await fs.readFile(XERO_TOKEN_FILE_PATH);
         allXeroTokens = JSON.parse(data);
-        console.log('All Xero tokens loaded from file.');
     } catch (error) {
         if (error.code === 'ENOENT') {
-            console.log('Xero token file not found. Proceeding with empty Xero tokens store.');
+            // Xero token file not found. Proceeding with empty Xero tokens store.
         } else {
             console.error('Error loading Xero tokens from file:', error);
         }
@@ -97,7 +93,6 @@ export async function refreshPipedriveToken(companyId) {
         allCompanyTokens[companyId].tokenExpiresAt = Date.now() + (expires_in * 1000) - (5 * 60 * 1000);
         
         await saveAllTokensToFile();
-        console.log(`Pipedrive token refreshed for company ${companyId}`);
         return allCompanyTokens[companyId];
     } catch (error) {
         console.error(`Error refreshing Pipedrive token for company ${companyId}:`, error.response ? error.response.data : error.message);
@@ -138,7 +133,6 @@ export async function refreshXeroToken(pipedriveCompanyId) {
         allXeroTokens[pipedriveCompanyId].tokenExpiresAt = Date.now() + (expires_in * 1000) - (5 * 60 * 1000);
         
         await saveAllXeroTokensToFile();
-        console.log(`Xero token refreshed for Pipedrive Company ID ${pipedriveCompanyId}`);
         return allXeroTokens[pipedriveCompanyId];
     } catch (error) {
         console.error(`Error refreshing Xero token for Pipedrive Company ID ${pipedriveCompanyId}:`, error.response ? error.response.data : error.message);
@@ -160,7 +154,6 @@ export async function getPipedriveAccessToken(companyId) {
     let companyTokens = allCompanyTokens[companyId];
 
     if (!companyTokens || !companyTokens.accessToken) {
-        console.log(`No Pipedrive access token found for company ${companyId}, attempting to refresh.`);
         try {
             companyTokens = await refreshPipedriveToken(companyId);
         } catch (error) {
@@ -172,7 +165,6 @@ export async function getPipedriveAccessToken(companyId) {
     // Check if the token is expired or close to expiring (e.g., within 5 minutes)
     const now = Date.now();
     if (companyTokens.tokenExpiresAt && now >= companyTokens.tokenExpiresAt) {
-        console.log(`Pipedrive access token for company ${companyId} is expired, refreshing.`);
         try {
             companyTokens = await refreshPipedriveToken(companyId);
         } catch (error) {

@@ -43,7 +43,6 @@ export const createXeroQuote = async (req, res) => {
             return res.status(401).json({ error: `Pipedrive not authenticated for company ${pipedriveCompanyId}.` });
         }
         if (Date.now() >= pdCompanyTokens.tokenExpiresAt) {
-            console.log(`Pipedrive token expired for ${pipedriveCompanyId} in createXeroQuote, attempting refresh.`);
             pdCompanyTokens = await tokenService.refreshPipedriveToken(pipedriveCompanyId);
         }
         const pdApiDomain = pdCompanyTokens.apiDomain; // Ensure this is correctly retrieved/set during Pipedrive auth
@@ -84,7 +83,6 @@ export const createXeroQuote = async (req, res) => {
         }
 
         if (Date.now() >= xeroTokenInfo.tokenExpiresAt) {
-            console.log(`Xero token expired for ${pipedriveCompanyId} in createXeroQuote, attempting refresh.`);
             xeroTokenInfo = await tokenService.refreshXeroToken(pipedriveCompanyId); // This should save the refreshed token
         }
         const xeroAccessToken = xeroTokenInfo.accessToken;
@@ -101,7 +99,6 @@ export const createXeroQuote = async (req, res) => {
             xeroContactID = existingXeroContact.ContactID;
             // Optional: If contactEmail is available and different from existingXeroContact.EmailAddress,
             // you could update the contact here. For now, we'll use the existing contact as is.
-            console.log(`Found existing Xero contact by name '${contactName}': ID ${xeroContactID}`);
         } else {
             // If not found by name, create a new contact
             const newContactPayload = {
@@ -109,11 +106,9 @@ export const createXeroQuote = async (req, res) => {
                 // Only add EmailAddress if contactEmail is not null/undefined
                 ...(contactEmail && { EmailAddress: contactEmail }) 
             };
-            console.log(`Creating new Xero contact with payload:`, newContactPayload);
             const createdContact = await xeroApiService.createXeroContact(xeroAccessToken, xeroTenantId, newContactPayload);
             // createXeroContact now returns the contact object directly
             xeroContactID = createdContact.ContactID; 
-            console.log(`Created new Xero contact '${contactName}': ID ${xeroContactID}`);
         }
 
         // 4. Prepare Xero Quote Data
@@ -158,7 +153,6 @@ export const createXeroQuote = async (req, res) => {
                 // Ensure updateDealWithQuoteNumber is correctly imported/available in pipedriveApiService
                 // Pass pdApiDomain and pdAccessToken to updateDealWithQuoteNumber
                 await pipedriveApiService.updateDealWithQuoteNumber(pdApiDomain, pdAccessToken, pipedriveDealId, createdQuote.QuoteNumber);
-                console.log(`Pipedrive deal ${pipedriveDealId} updated with Xero quote number ${createdQuote.QuoteNumber}.`);
                 res.status(201).json({ 
                     message: 'Xero quote created and Pipedrive deal updated successfully!', 
                     quoteNumber: createdQuote.QuoteNumber, 
@@ -221,7 +215,6 @@ export const acceptXeroQuote = async (req, res) => {
         }
 
         if (Date.now() >= xeroTokenInfo.tokenExpiresAt) {
-            console.log(`Xero token expired for ${pipedriveCompanyId} in acceptXeroQuote, attempting refresh.`);
             xeroTokenInfo = await tokenService.refreshXeroToken(pipedriveCompanyId);
         }
         const xeroAccessToken = xeroTokenInfo.accessToken;
@@ -233,7 +226,6 @@ export const acceptXeroQuote = async (req, res) => {
         // For example: await xeroApiService.acceptQuote(xeroAccessToken, xeroTenantId, quoteId);
         
         // Simulating a successful quote acceptance for now
-        console.log(`Attempting to accept Xero Quote ID: ${quoteId} for company ${pipedriveCompanyId}`);
         
         // This is a placeholder. Replace with actual Xero API call.
         const acceptanceResult = await xeroApiService.updateQuoteStatus(xeroAccessToken, xeroTenantId, quoteId, 'ACCEPTED');
@@ -281,7 +273,6 @@ export const createXeroProject = async (req, res) => {
         }
 
         if (Date.now() >= xeroTokenInfo.tokenExpiresAt) {
-            console.log(`Xero token expired for ${pipedriveCompanyId} in createXeroProject, attempting refresh.`);
             xeroTokenInfo = await tokenService.refreshXeroToken(pipedriveCompanyId);
         }
         
@@ -297,14 +288,13 @@ export const createXeroProject = async (req, res) => {
         };
 
         // 3. Call Xero API to create the project
-        console.log(`Attempting to create Xero Project: ${name} for company ${pipedriveCompanyId}`);
         const newProject = await xeroApiService.createXeroProject(xeroAccessToken, xeroTenantId, projectData, quoteId, dealId, pipedriveCompanyId);        // 4. Update Pipedrive deal with project number if available and dealId is provided
         if (newProject && dealId && pipedriveCompanyId) {
             try {
                 // Get Pipedrive tokens for updating the deal
                 let pdCompanyTokens = tokenService.allCompanyTokens[pipedriveCompanyId];
                 if (!pdCompanyTokens || !pdCompanyTokens.accessToken) {
-                    console.log('Warning: Pipedrive tokens not available for deal update');
+                    // Warning: Pipedrive tokens not available for deal update
                 } else {
                     if (Date.now() >= pdCompanyTokens.tokenExpiresAt) {
                         pdCompanyTokens = await tokenService.refreshPipedriveToken(pipedriveCompanyId);
@@ -317,7 +307,6 @@ export const createXeroProject = async (req, res) => {
                     const projectIdentifier = newProject.projectId || newProject.id || newProject.projectNumber || `Project: ${name}`;
                     
                     await pipedriveApiService.updateDealWithProjectNumber(pdApiDomain, pdAccessToken, dealId, projectIdentifier);
-                    console.log('Pipedrive deal updated successfully with project info');
                 }
             } catch (updateError) {
                 console.error('Failed to update Pipedrive deal with project info:', updateError.message);
