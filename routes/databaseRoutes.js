@@ -17,6 +17,7 @@
 
 import express from 'express';
 import * as databaseController from '../controllers/databaseController.js';
+import { logRoute } from '../middleware/routeLogger.js';
 
 const router = express.Router();
 
@@ -26,7 +27,10 @@ const router = express.Router();
  * @access  Admin
  * @returns {Object} Database health metrics, server status, and collection statistics
  */
-router.get('/health', databaseController.getDatabaseHealth);
+router.get('/health', 
+    logRoute('Database Health Check'), 
+    databaseController.checkDatabaseHealth
+);
 
 /**
  * @route   GET /api/database/consistency
@@ -34,7 +38,10 @@ router.get('/health', databaseController.getDatabaseHealth);
  * @access  Admin
  * @returns {Object} Data consistency validation results and recommendations
  */
-router.get('/consistency', databaseController.validateDataConsistency);
+router.get('/consistency', 
+    logRoute('Data Consistency Validation'), 
+    databaseController.validateDataConsistency
+);
 
 /**
  * @route   POST /api/database/cleanup
@@ -45,7 +52,10 @@ router.get('/consistency', databaseController.validateDataConsistency);
  * @body    {boolean} [cleanInvalidData=false] - Clean invalid data (destructive)
  * @returns {Object} Cleanup results and recommendations
  */
-router.post('/cleanup', databaseController.performDatabaseCleanup);
+router.post('/cleanup', 
+    logRoute('Database Cleanup'), 
+    databaseController.performDatabaseCleanup
+);
 
 /**
  * @route   GET /api/database/analytics
@@ -54,7 +64,10 @@ router.post('/cleanup', databaseController.performDatabaseCleanup);
  * @query   {number} [days=30] - Number of days to analyze (1-365)
  * @returns {Object} Project analytics, trends, and insights
  */
-router.get('/analytics', databaseController.getProjectAnalytics);
+router.get('/analytics', 
+    logRoute('Project Analytics'), 
+    databaseController.getProjectAnalytics
+);
 
 /**
  * @route   GET /api/database/performance
@@ -62,7 +75,10 @@ router.get('/analytics', databaseController.getProjectAnalytics);
  * @access  Admin
  * @returns {Object} Database performance metrics and analysis
  */
-router.get('/performance', databaseController.getDatabasePerformance);
+router.get('/performance', 
+    logRoute('Database Performance Metrics'), 
+    databaseController.getDatabasePerformance
+);
 
 // Migration Management Routes
 
@@ -72,7 +88,10 @@ router.get('/performance', databaseController.getDatabasePerformance);
  * @access  Admin
  * @returns {Object} Migration status, pending migrations, and recommendations
  */
-router.get('/migration/status', databaseController.getMigrationStatus);
+router.get('/migration/status', 
+    logRoute('Migration Status Check'), 
+    databaseController.getMigrationStatus
+);
 
 /**
  * @route   POST /api/database/migration/run
@@ -83,7 +102,10 @@ router.get('/migration/status', databaseController.getMigrationStatus);
  * @body    {boolean} [force=false] - Force migration even if already applied
  * @returns {Object} Migration results and recommendations
  */
-router.post('/migration/run', databaseController.runMigrations);
+router.post('/migration/run', 
+    logRoute('Run Database Migrations'), 
+    databaseController.runMigrations
+);
 
 /**
  * @route   POST /api/database/migration/rollback
@@ -93,6 +115,9 @@ router.post('/migration/run', databaseController.runMigrations);
  * @body    {boolean} [force=false] - Force rollback even if risky
  * @returns {Object} Rollback results and recommendations
  */
-router.post('/migration/rollback', databaseController.rollbackLastMigration);
+router.post('/migration/rollback', 
+    logRoute('Rollback Migration'), 
+    databaseController.rollbackLastMigration
+);
 
 export default router;

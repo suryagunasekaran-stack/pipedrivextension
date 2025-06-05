@@ -16,16 +16,29 @@
 import express from 'express';
 import { getPipedriveData, createProject, handlePipedriveAction } from '../controllers/pipedriveController.js';
 import { requirePipedriveAuth } from '../middleware/authMiddleware.js';
+import { logRoute } from '../middleware/routeLogger.js';
 
 const router = express.Router();
 
 // Pipedrive Action URL (from App Extensions) - requires auth but uses query params
-router.get('/pipedrive-action', requirePipedriveAuth, handlePipedriveAction);
+router.get('/pipedrive-action', 
+    logRoute('Handle Pipedrive Action'), 
+    requirePipedriveAuth, 
+    handlePipedriveAction
+);
 
 // API to get Pipedrive data for frontend - requires auth
-router.get('/api/pipedrive-data', requirePipedriveAuth, getPipedriveData);
+router.get('/api/pipedrive-data', 
+    logRoute('Get Pipedrive Data'), 
+    requirePipedriveAuth, 
+    getPipedriveData
+);
 
 // Route to handle the Pipedrive action for creating a project - requires auth
-router.post('/api/pipedrive/create-project', requirePipedriveAuth, createProject);
+router.post('/api/pipedrive/create-project', 
+    logRoute('Create Project from Deal'), 
+    requirePipedriveAuth, 
+    createProject
+);
 
 export default router;

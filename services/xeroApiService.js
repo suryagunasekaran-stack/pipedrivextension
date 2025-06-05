@@ -18,6 +18,7 @@
  */
 
 import axios from 'axios';
+import logger from '../lib/logger.js';
 
 /**
  * Retrieves all Xero tenant connections for the authenticated user
@@ -202,50 +203,95 @@ export const createQuote = async (accessToken, tenantId, quotePayload, idempoten
 };
 
 /**
- * Updates the status of an existing Xero quote
+ * Updates the status of a Xero quote
  * 
- * @param {string} accessToken - Valid Xero access token
+ * @param {string} accessToken - Xero access token
  * @param {string} tenantId - Xero tenant ID
  * @param {string} quoteId - Quote ID to update
- * @param {string} status - New status (DRAFT, SENT, ACCEPTED, DECLINED, INVOICED)
+ * @param {string} status - New status (e.g., 'ACCEPTED', 'DECLINED')
  * @returns {Promise<Object>} Updated quote object
- * @throws {Error} When quote ID/status missing or validation fails
  */
 export const updateQuoteStatus = async (accessToken, tenantId, quoteId, status) => {
-  if (!quoteId || !status) {
-    throw new Error('Quote ID and status are required for updating quote status.');
-  }
-
-  const validStatuses = ['DRAFT', 'SENT', 'ACCEPTED', 'DECLINED', 'INVOICED'];
-  if (!validStatuses.includes(status)) {
-    throw new Error(`Invalid status: ${status}. Must be one of: ${validStatuses.join(', ')}`);
-  }
-
   try {
-    const response = await axios.post(
-      `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`,
-      {
-        Quotes: [{
-          QuoteID: quoteId,
-          Status: status
-        }]
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Xero-Tenant-Id': tenantId,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
+    logger.system('Updating Xero quote status', {
+      quoteId,
+      status,
+      operation: 'quote_status_update'
+    });
+
+    // Get current quote details
+    const getCurrentQuoteUrl = `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`;
+    const currentQuote = await axios.get(getCurrentQuoteUrl, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Xero-tenant-id': tenantId,
+        'Accept': 'application/json'
       }
-    );
+    });
+
+    const currentQuoteData = currentQuote.data?.Quotes?.[0];
+    if (!currentQuoteData) {
+      throw new Error('Quote not found or invalid response from Xero API');
+    }
+
+    const currentStatus = currentQuoteData.Status;
+    
+    // Check if quote is already in the desired state
+    if (currentStatus === status) {
+      logger.system('Quote already has target status', { quoteId, status });
+      return currentQuoteData;
+    }
+
+    // Validate status transition
+    if (currentStatus === 'ACCEPTED' && status !== 'ACCEPTED') {
+      throw new Error(`Cannot change quote status from ACCEPTED to ${status}. Accepted quotes cannot be modified.`);
+    }
+
+    // Prepare update payload with required fields
+    const updatePayload = {
+      Quotes: [{
+        QuoteID: quoteId,
+        Status: status,
+        // Include required fields from current quote
+        Contact: currentQuoteData.Contact,
+        Date: currentQuoteData.Date,
+        LineItems: currentQuoteData.LineItems,
+        Title: currentQuoteData.Title || '',
+        Summary: currentQuoteData.Summary || '',
+        Terms: currentQuoteData.Terms || ''
+      }]
+    };
+
+    // Send update request
+    const updateUrl = `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`;
+    const response = await axios.post(updateUrl, updatePayload, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Xero-tenant-id': tenantId,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
+    });
+
+    logger.system('Quote status update completed', {
+      quoteId,
+      oldStatus: currentStatus,
+      newStatus: response.data?.Quotes?.[0]?.Status,
+      operation: 'quote_status_update'
+    });
+
+    if (!response.data || !response.data.Quotes || !response.data.Quotes[0]) {
+      throw new Error('Invalid response format from Xero API');
+    }
     
     return response.data.Quotes[0];
   } catch (error) {
-    console.error(
-      `Error updating Xero quote ${quoteId} status to ${status}:`,
-      error.response ? JSON.stringify(error.response.data, null, 2) : error.message
-    );
+    logger.error(error, null, 'Xero quote status update', {
+      quoteId,
+      status,
+      errorType: error.constructor.name,
+      statusCode: error.response?.status
+    });
     
     if (error.response && error.response.data && error.response.data.Elements) {
       throw {
@@ -294,6 +340,17 @@ export const createXeroProject = async (accessToken, tenantId, projectData, quot
   }
 
   try {
+    console.log('Sending project creation request to Xero:', {
+      url: 'https://api.xero.com/projects.xro/2.0/projects',
+      payload: projectPayload,
+      headers: {
+        Authorization: 'Bearer [REDACTED]',
+        'Xero-Tenant-Id': tenantId,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      }
+    });
+
     const response = await axios.post(
       'https://api.xero.com/projects.xro/2.0/projects',
       projectPayload,
@@ -307,23 +364,324 @@ export const createXeroProject = async (accessToken, tenantId, projectData, quot
       }
     );
     
-    return response.data;
-  } catch (error) {
-    if (error.response) {
-      console.error('Xero API Error:', error.response.status, error.response.data);
-    } else if (error.request) {
-      console.error('Network Error: No response received from Xero API');
+    console.log('Xero project creation response status:', response.status);
+    console.log('Xero project creation response data type:', typeof response.data);
+    console.log('Xero project creation response data keys:', response.data ? Object.keys(response.data) : 'null');
+    console.log('Xero API response:', response.data);
+
+    if (!response.data) {
+      throw new Error('No data received from Xero API');
+    }
+
+    // Ensure we have a consistent project ID in the response
+    const project = response.data;
+    if (!project) {
+      throw new Error('Invalid project data received from Xero API');
+    }
+
+    // Log the raw project data for debugging
+    console.log('Raw project data:', project);
+    console.log('Project data type:', typeof project);
+    console.log('Project data keys:', Object.keys(project));
+
+    // Check for project ID in various possible locations
+    if (project.ProjectID) {
+      project.projectId = project.ProjectID;
+      console.log('Found ProjectID:', project.ProjectID);
+    } else if (project.projectId) {
+      project.ProjectID = project.projectId;
+      console.log('Found projectId:', project.projectId);
+    } else if (project.id) {
+      project.ProjectID = project.id;
+      project.projectId = project.id;
+      console.log('Found id:', project.id);
+    } else if (project.projectNumber) {
+      project.ProjectID = project.projectNumber;
+      project.projectId = project.projectNumber;
+      console.log('Found projectNumber:', project.projectNumber);
     } else {
-      console.error('Request Setup Error:', error.message);
+      console.error('Project response missing ID. Available fields:', Object.keys(project));
+      console.error('Full project object:', project);
+      throw new Error('Project ID not found in Xero API response');
     }
     
-    if (error.response && error.response.data && error.response.data.Elements) {
+    console.log('Processed project data with ID:', {
+      ProjectID: project.ProjectID,
+      projectId: project.projectId,
+      Name: project.Name
+    });
+    return project;
+  } catch (error) {
+    console.error('Error in createXeroProject:', {
+      error: error.message,
+      response: error.response?.data,
+      status: error.response?.status
+    });
+
+    if (error.response) {
+      console.error('Xero API Error:', error.response.status, error.response.data);
       throw {
-        message: "Xero API validation error while creating project.",
-        details: error.response.data.Elements,
+        message: "Xero API error while creating project",
+        details: error.response.data,
         status: error.response.status
       };
+    } else if (error.request) {
+      console.error('Network Error: No response received from Xero API');
+      throw {
+        message: "Network error while creating project",
+        details: "No response received from Xero API"
+      };
+    } else {
+      console.error('Request Setup Error:', error.message);
+      throw {
+        message: "Error setting up project creation request",
+        details: error.message
+      };
     }
+  }
+};
+
+/**
+ * Creates a task in a Xero project
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {string} projectId - Project ID to create task in
+ * @param {string} name - Task name
+ * @returns {Promise<Object>} Created task object
+ * @throws {Error} When task creation fails
+ */
+export const createXeroTask = async (accessToken, tenantId, projectId, name) => {
+  if (!projectId || !name) {
+    throw new Error('Project ID and task name are required for creating a Xero task.');
+  }
+
+  try {
+    logger.info('Creating Xero task', {
+      projectId,
+      name,
+      tenantId
+    });
+
+    const taskPayload = {
+      Name: name,
+      ChargeType: "FIXED",
+      RateValue: 0,
+      EstimateMinutes: 0,
+      Amount: 0,
+      Status: "ACTIVE"
+    };
+
+    logger.debug('Task creation payload', taskPayload);
+
+    const url = `https://api.xero.com/projects.xro/2.0/projects/${projectId}/tasks`;
+    logger.debug('Task creation URL', { url });
+
+    const response = await axios.post(
+      url,
+      taskPayload,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Xero-Tenant-Id': tenantId,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+      }
+    );
+    
+    logger.info('Task creation response received', {
+      projectId,
+      name,
+      responseStatus: response.status,
+      hasData: !!response.data,
+      responseKeys: response.data ? Object.keys(response.data) : []
+    });
+
+    if (!response.data) {
+      throw new Error('No data received from Xero API');
+    }
+
+    logger.debug('Task creation successful', {
+      projectId,
+      name,
+      taskData: response.data
+    });
+
+    return response.data;
+  } catch (error) {
+    logger.error(error, {
+      projectId,
+      name,
+      action: 'create_task',
+      response: error.response ? {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data,
+        headers: error.response.headers
+      } : 'No response object',
+      request: error.config ? {
+        method: error.config.method,
+        url: error.config.url,
+        headers: error.config.headers
+      } : 'No config object'
+    }, 'Error creating Xero task');
+    
+    // Provide more specific error messages
+    if (error.response) {
+      const status = error.response.status;
+      const errorData = error.response.data;
+      
+      if (status === 404) {
+        throw new Error(`Project ${projectId} not found in Xero. Please verify the project exists.`);
+      } else if (status === 400) {
+        throw new Error(`Invalid task data provided: ${errorData?.message || 'Bad request'}`);
+      } else if (status === 401) {
+        throw new Error('Unauthorized: Access token may be expired or invalid');
+      } else if (status === 403) {
+        throw new Error('Forbidden: Insufficient permissions to create tasks');
+      } else {
+        throw new Error(`Xero API error (${status}): ${errorData?.message || error.message}`);
+      }
+    } else if (error.request) {
+      throw new Error('Network error: Unable to connect to Xero API');
+    } else {
+      throw error;
+    }
+  }
+};
+
+/**
+ * Retrieves all quotes from Xero
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @returns {Promise<Array>} Array of quote objects
+ * @throws {Error} When quote retrieval fails
+ */
+export const getXeroQuotes = async (accessToken, tenantId) => {
+  try {
+    console.log('=== DEBUG: Retrieving all Xero quotes ===');
+    console.log('Request parameters:', {
+      tenantId,
+      accessTokenLength: accessToken ? accessToken.length : 0
+    });
+
+    const url = 'https://api.xero.com/api.xro/2.0/Quotes';
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      'Xero-Tenant-Id': tenantId,
+      Accept: 'application/json',
+    };
+
+    console.log('Request details:', {
+      method: 'GET',
+      url,
+      headers: {
+        ...headers,
+        Authorization: `Bearer ${accessToken.substring(0, 10)}...`
+      }
+    });
+
+    const response = await axios.get(url, { headers });
+    
+
+
+    const quotes = response.data.Quotes || [];
+
+    
+    return quotes;
+  } catch (error) {
+
+    console.error('Error retrieving Xero quotes:', error.response ? error.response.data : error.message);
+    throw error;
+  }
+};
+
+/**
+ * Finds a Xero quote by quote number
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {string} quoteNumber - Quote number to search for
+ * @returns {Promise<Object|null>} Quote object or null if not found
+ * @throws {Error} When quote search fails
+ */
+export const findXeroQuoteByNumber = async (accessToken, tenantId, quoteNumber) => {
+  try {
+    console.log('=== DEBUG: Finding Xero quote by number ===');
+    console.log('Search parameters:', {
+      quoteNumber,
+      tenantId,
+      accessTokenLength: accessToken ? accessToken.length : 0
+    });
+
+    const quotes = await getXeroQuotes(accessToken, tenantId);
+    
+    console.log('=== DEBUG: Retrieved quotes from Xero ===');
+    console.log('Total quotes found:', quotes.length);
+    console.log('Quote numbers in system:', quotes.map(q => q.QuoteNumber));
+    console.log('Looking for quote number:', quoteNumber);
+    
+    // Log detailed info about each quote for debugging
+    quotes.forEach((quote, index) => {
+      console.log(`Quote ${index + 1}:`, {
+        QuoteNumber: quote.QuoteNumber,
+        QuoteID: quote.QuoteID,
+        Status: quote.Status,
+        Reference: quote.Reference,
+        Contact: quote.Contact ? quote.Contact.Name : 'No contact'
+      });
+    });
+
+    const foundQuote = quotes.find(quote => {
+      const match = quote.QuoteNumber === quoteNumber;
+      console.log(`Comparing "${quote.QuoteNumber}" === "${quoteNumber}": ${match}`);
+      return match;
+    });
+    
+    console.log('=== DEBUG: Quote search result ===');
+    console.log('Found quote:', foundQuote ? {
+      QuoteNumber: foundQuote.QuoteNumber,
+      QuoteID: foundQuote.QuoteID,
+      Status: foundQuote.Status,
+      Reference: foundQuote.Reference
+    } : 'null');
+
+    return foundQuote || null;
+  } catch (error) {
+    console.log('=== DEBUG: Error finding quote by number ===');
+    console.log('Error message:', error.message);
+    console.log('Error response:', error.response?.data);
+    console.error('Error finding Xero quote by number:', error.response ? error.response.data : error.message);
+    throw error;
+  }
+};
+
+/**
+ * Retrieves all projects from Xero
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @returns {Promise<Array>} Array of project objects
+ * @throws {Error} When project retrieval fails
+ */
+export const getXeroProjects = async (accessToken, tenantId) => {
+  try {
+    const response = await axios.get(
+      'https://api.xero.com/projects.xro/2.0/projects',
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Xero-Tenant-Id': tenantId,
+          Accept: 'application/json',
+        },
+      }
+    );
+    
+    return response.data.Items || [];
+  } catch (error) {
+    console.error('Error retrieving Xero projects:', error.response ? error.response.data : error.message);
     throw error;
   }
 };

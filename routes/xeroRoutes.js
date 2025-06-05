@@ -17,19 +17,41 @@
 import express from 'express';
 import * as xeroController from '../controllers/xeroController.js';
 import { requirePipedriveWithOptionalXero, optionalXeroAuth } from '../middleware/authMiddleware.js';
+import { logRoute } from '../middleware/routeLogger.js';
 
 const router = express.Router();
 
 // API to check Xero connection status (no auth required, just checks status)
-router.get('/api/xero/status', xeroController.getXeroStatus);
+router.get('/api/xero/status', 
+    logRoute('Check Xero Status'), 
+    xeroController.getXeroStatus
+);
 
 // API to create Xero Quote (requires both Pipedrive and Xero auth)
-router.post('/api/xero/create-quote', requirePipedriveWithOptionalXero, xeroController.createXeroQuote);
+router.post('/api/xero/create-quote', 
+    logRoute('Create Xero Quote'), 
+    requirePipedriveWithOptionalXero, 
+    xeroController.createXeroQuote
+);
 
 // API to accept a Xero Quote (requires Xero auth)
-router.put('/api/xero/accept-quote/:quoteId', optionalXeroAuth, xeroController.acceptXeroQuote);
+router.put('/api/xero/accept-quote/:quoteId', 
+    logRoute('Accept Xero Quote'), 
+    optionalXeroAuth, 
+    xeroController.acceptXeroQuote
+);
 
 // API to create a Xero Project (requires Xero auth)
-router.post('/api/xero/create-project', optionalXeroAuth, xeroController.createXeroProject);
+router.post('/api/xero/create-project', 
+    logRoute('Create Xero Project'), 
+    optionalXeroAuth, 
+    xeroController.createXeroProject
+);
+
+// Debug endpoint to test quote acceptance (no auth middleware for easier testing)
+router.post('/api/xero/debug-quote-acceptance', 
+    logRoute('Debug Quote Acceptance'), 
+    xeroController.debugQuoteAcceptance
+);
 
 export default router;

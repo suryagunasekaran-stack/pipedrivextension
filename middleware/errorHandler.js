@@ -7,7 +7,7 @@
  * 
  * Key features:
  * - Async route handler error catching with Promise wrapper
- * - Centralized error processing with context logging
+ * - Centralized error processing with clean logging
  * - Automatic sensitive data redaction in error logs
  * - Environment-specific error detail exposure
  * - HTTP status code normalization for common error types
@@ -32,7 +32,7 @@ export const asyncHandler = (fn) => {
 };
 
 /**
- * Centralized error handling middleware with automatic logging and response formatting
+ * Centralized error handling middleware with clean logging and response formatting
  * 
  * @param {Error} err - Error object
  * @param {Object} req - Express request object
@@ -40,29 +40,17 @@ export const asyncHandler = (fn) => {
  * @param {Function} next - Express next function
  */
 export const errorHandler = (err, req, res, next) => {
-    const errorContext = {
-        method: req.method,
-        url: req.url,
-        requestId: req.id,
-        userAgent: req.get('User-Agent'),
-        body: req.body,
-        query: req.query,
-        params: req.params,
-        headers: {
-            'content-type': req.get('Content-Type'),
-            'authorization': req.get('Authorization'),
-            'x-forwarded-for': req.get('X-Forwarded-For'),
-            'cookie': req.get('Cookie')
-        },
-        accessToken: err.accessToken,
-        apiKey: err.apiKey,
-        token: err.token
-    };
-
-    req.log.error(err, errorContext, 'Unhandled error occurred');
+    // Use the new logger for clean error logging
+    const operation = req.operationName || 'Request processing';
+    logger.error(err, req, operation, {
+        userAgent: req.get('User-Agent')?.split(' ')[0] || 'Unknown',
+        body: req.body ? 'Present' : 'Empty',
+        query: Object.keys(req.query || {}).length > 0 ? 'Present' : 'Empty'
+    });
 
     let statusCode = err.statusCode || err.status || 500;
     
+    // Normalize common error types
     if (err.name === 'ValidationError') {
         statusCode = 400;
     } else if (err.name === 'UnauthorizedError' || err.name === 'JsonWebTokenError') {
@@ -78,33 +66,25 @@ export const errorHandler = (err, req, res, next) => {
         timestamp: new Date().toISOString()
     };
 
+    // Only include debug info in development
     if (process.env.NODE_ENV === 'development') {
         errorResponse.stack = err.stack;
         errorResponse.details = err.details || null;
     }
 
-    req.log.warn('Error response sent', {
-        statusCode,
-        errorMessage: errorResponse.message,
-        requestId: req.id
-    });
-
     res.status(statusCode).json(errorResponse);
 };
 
 /**
- * 404 handler for unmatched routes with request logging
+ * 404 handler for unmatched routes with clean logging
  * 
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  * @param {Function} next - Express next function
  */
 export const notFoundHandler = (req, res, next) => {
-    req.log.warn('Route not found', {
-        method: req.method,
-        url: req.url,
-        requestId: req.id,
-        userAgent: req.get('User-Agent')
+    logger.warn(req, 'Route not found', {
+        userAgent: req.get('User-Agent')?.split(' ')[0] || 'Unknown'
     });
 
     res.status(404).json({

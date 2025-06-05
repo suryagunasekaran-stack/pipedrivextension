@@ -7,6 +7,7 @@
 import 'dotenv/config';
 import * as tokenService from '../services/secureTokenService.js';
 import * as pipedriveApiService from '../services/pipedriveApiService.js';
+import { logSuccess, logWarning, logProcessing } from '../middleware/routeLogger.js';
 
 const pipedriveClientId = process.env.CLIENT_ID;
 const pipedriveClientSecret = process.env.CLIENT_SECRET;
@@ -26,20 +27,36 @@ export const handlePipedriveAction = async (req, res) => {
     const companyId = req.query.companyId;
     const uiAction = req.query.uiAction;
 
+    logProcessing(req, 'Validating input parameters', { 
+        dealId, 
+        companyId, 
+        uiAction, 
+        resource: req.query.resource 
+    });
+
     if (!companyId) {
+        logWarning(req, 'Company ID missing in Pipedrive request');
         return res.status(400).send('Company ID is missing in the request from Pipedrive.');
     }
 
     // Authentication is handled by middleware, tokens are available in req.pipedriveAuth
     const { apiDomain } = req.pipedriveAuth;
+    
+    logProcessing(req, 'Retrieved authentication data', { 
+        hasApiDomain: !!apiDomain,
+        authSource: 'middleware'
+    });
 
     if (!dealId && req.query.resource === 'deal') {
+        logWarning(req, 'Deal ID missing for deal resource', { resource: req.query.resource });
         return res.status(400).send('Deal ID (from selectedIds) is missing for a deal resource.');
     } else if (!dealId && req.query.resource) {
+        logWarning(req, 'Required ID missing for resource', { resource: req.query.resource });
         return res.status(400).send('Required ID (selectedIds) is missing for the resource.');
     }
 
     if (!apiDomain) {
+        logWarning(req, 'API domain configuration missing', { companyId });
         return res.status(500).send('API domain configuration missing for your company. Please re-authenticate.');
     }
 
@@ -52,11 +69,31 @@ export const handlePipedriveAction = async (req, res) => {
         frontendRedirectUrl = `${baseFrontendUrl}/pipedrive-data-view`;
     }
 
+    logProcessing(req, 'Determined redirect URL', { 
+        uiAction, 
+        baseFrontendUrl, 
+        redirectUrl: frontendRedirectUrl 
+    });
+
     if (dealId && companyId) {
-        return res.redirect(`${frontendRedirectUrl}?dealId=${dealId}&companyId=${companyId}&uiAction=${uiAction || 'createQuote'}`);
+        const redirectUrl = `${frontendRedirectUrl}?dealId=${dealId}&companyId=${companyId}&uiAction=${uiAction || 'createQuote'}`;
+        logSuccess(req, 'Redirecting to frontend with deal and company', { 
+            dealId, 
+            companyId, 
+            uiAction: uiAction || 'createQuote',
+            finalRedirectUrl: redirectUrl
+        });
+        return res.redirect(redirectUrl);
     } else if (companyId) {
-        return res.redirect(`${frontendRedirectUrl}?companyId=${companyId}&uiAction=${uiAction || 'createQuote'}`);
+        const redirectUrl = `${frontendRedirectUrl}?companyId=${companyId}&uiAction=${uiAction || 'createQuote'}`;
+        logSuccess(req, 'Redirecting to frontend with company only', { 
+            companyId, 
+            uiAction: uiAction || 'createQuote',
+            finalRedirectUrl: redirectUrl
+        });
+        return res.redirect(redirectUrl);
     } else {
+        logWarning(req, 'Cannot redirect - missing critical parameters');
         return res.status(400).send('Cannot redirect: Missing critical parameters (dealId or companyId).');
     }
 };
@@ -74,12 +111,23 @@ export const handlePipedriveAction = async (req, res) => {
 export const createProject = async (req, res) => {
     const { dealId, companyId } = req.body;
 
+    logProcessing(req, 'Validating required parameters', { 
+        dealId: !!dealId, 
+        companyId: !!companyId 
+    });
+
     if (!dealId || !companyId) {
+        logWarning(req, 'Missing required parameters', { dealId: !!dealId, companyId: !!companyId });
         return res.status(400).json({ error: 'Deal ID and Company ID are required in the request body.' });
     }
 
     // Authentication handled by middleware - tokens available in req.pipedriveAuth
     const { accessToken, apiDomain } = req.pipedriveAuth;
+    
+    logProcessing(req, 'Retrieved authentication tokens', { 
+        hasAccessToken: !!accessToken,
+        hasApiDomain: !!apiDomain 
+    });
     
     const xeroQuoteCustomFieldKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY;
     const vesselNameKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME;
@@ -87,43 +135,78 @@ export const createProject = async (req, res) => {
     const locationKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_LOCATION;
     const departmentKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT;
 
+    logProcessing(req, 'Environment configuration loaded', {
+        hasXeroQuoteKey: !!xeroQuoteCustomFieldKey,
+        hasVesselNameKey: !!vesselNameKey,
+        hasSalesInChargeKey: !!salesInChargeKey,
+        hasLocationKey: !!locationKey,
+        hasDepartmentKey: !!departmentKey
+    });
+
     if (!xeroQuoteCustomFieldKey) {
-        console.error('PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY is not set in .env.');
+        logWarning(req, 'PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY not configured');
     }
 
     try {
+        logProcessing(req, 'Fetching deal details from Pipedrive', { dealId, apiDomain });
+        
         const dealDetails = await pipedriveApiService.getDealDetails(apiDomain, accessToken, dealId);
 
         if (!dealDetails) {
+            logWarning(req, 'Deal not found', { dealId });
             return res.status(404).json({ error: `Deal with ID ${dealId} not found.` });
         }
+
+        logProcessing(req, 'Deal details retrieved', {
+            dealTitle: dealDetails.title,
+            dealValue: dealDetails.value,
+            hasPersonId: !!(dealDetails.person_id && dealDetails.person_id.value),
+            hasOrgId: !!(dealDetails.org_id && dealDetails.org_id.value)
+        });
 
         const xeroQuoteNumber = xeroQuoteCustomFieldKey ? (dealDetails[xeroQuoteCustomFieldKey] || null) : null;
 
         const frontendDealObject = { ...dealDetails };
 
+        // Add custom fields to the deal object
+        const customFieldsAdded = {};
         if (departmentKey) {
             frontendDealObject.department = dealDetails[departmentKey] || null;
+            customFieldsAdded.department = !!frontendDealObject.department;
         }
         if (vesselNameKey) {
             frontendDealObject.vessel_name = dealDetails[vesselNameKey] || null;
+            customFieldsAdded.vesselName = !!frontendDealObject.vessel_name;
         }
         if (locationKey) {
             frontendDealObject.location = dealDetails[locationKey] || null;
+            customFieldsAdded.location = !!frontendDealObject.location;
         }
         if (salesInChargeKey) {
             frontendDealObject.sales_in_charge = dealDetails[salesInChargeKey] || null;
+            customFieldsAdded.salesInCharge = !!frontendDealObject.sales_in_charge;
         }
 
-        res.json({
+        logProcessing(req, 'Custom fields processed', customFieldsAdded);
+
+        const responseData = {
             message: 'Project creation initiated (simulated). Fetched deal details and custom fields.',
             deal: frontendDealObject,
             xeroQuoteNumber: xeroQuoteNumber
+        };
+
+        logSuccess(req, 'Deal details and custom fields retrieved successfully', { 
+            dealId,
+            hasXeroQuote: !!xeroQuoteNumber,
+            customFields: customFieldsAdded,
+            responseSize: JSON.stringify(responseData).length
         });
 
+        res.json(responseData);
+
     } catch (error) {
-        console.error('Error in createProject controller:', error.response ? error.response.data : error.message);
-        res.status(500).json({ error: 'Failed to process project creation.', details: error.message });
+        // Error will be handled by the error middleware with proper logging
+        throw new Error(`Failed to process project creation: ${error.message}`);
     }
 };
 
@@ -140,33 +223,102 @@ export const createProject = async (req, res) => {
 export const getPipedriveData = async (req, res) => {
     const { dealId, companyId } = req.query;
 
+    logProcessing(req, 'Validating query parameters', { 
+        dealId: !!dealId, 
+        companyId: !!companyId 
+    });
+
     if (!dealId || !companyId) {
+        logWarning(req, 'Missing required query parameters', { dealId: !!dealId, companyId: !!companyId });
         return res.status(400).json({ error: 'Deal ID and Company ID are required.' });
     }
 
     // Authentication handled by middleware - tokens available in req.pipedriveAuth
     const { accessToken, apiDomain } = req.pipedriveAuth;
 
+    logProcessing(req, 'Starting comprehensive Pipedrive data retrieval', { dealId, apiDomain });
+
     try {
+        // Fetch deal details
+        logProcessing(req, 'Fetching deal details', { dealId });
         const dealDetails = await pipedriveApiService.getDealDetails(apiDomain, accessToken, dealId);
+        
+        logProcessing(req, 'Deal details retrieved', {
+            dealTitle: dealDetails.title,
+            hasPersonId: !!(dealDetails.person_id && dealDetails.person_id.value),
+            hasOrgId: !!(dealDetails.org_id && dealDetails.org_id.value)
+        });
+        
+        // Fetch person details if available
         let personDetails = null;
         if (dealDetails.person_id && dealDetails.person_id.value) {
-            personDetails = await pipedriveApiService.getPersonDetails(apiDomain, accessToken, dealDetails.person_id.value);
+            try {
+                logProcessing(req, 'Fetching person details', { personId: dealDetails.person_id.value });
+                personDetails = await pipedriveApiService.getPersonDetails(apiDomain, accessToken, dealDetails.person_id.value);
+                logProcessing(req, 'Person details retrieved', { 
+                    personName: personDetails?.name,
+                    hasEmail: !!(personDetails?.email && personDetails.email.length > 0)
+                });
+            } catch (error) {
+                logWarning(req, 'Could not fetch person details', { 
+                    personId: dealDetails.person_id.value,
+                    error: error.message 
+                });
+            }
         }
+        
+        // Fetch organization details if available
         let orgDetails = null;
         if (dealDetails.org_id && dealDetails.org_id.value) {
-            orgDetails = await pipedriveApiService.getOrganizationDetails(apiDomain, accessToken, dealDetails.org_id.value);
+            try {
+                logProcessing(req, 'Fetching organization details', { orgId: dealDetails.org_id.value });
+                orgDetails = await pipedriveApiService.getOrganizationDetails(apiDomain, accessToken, dealDetails.org_id.value);
+                logProcessing(req, 'Organization details retrieved', { 
+                    orgName: orgDetails?.name,
+                    hasAddress: !!orgDetails?.address
+                });
+            } catch (error) {
+                logWarning(req, 'Could not fetch organization details', { 
+                    orgId: dealDetails.org_id.value,
+                    error: error.message 
+                });
+            }
         }
-        const dealProducts = await pipedriveApiService.getDealProducts(apiDomain, accessToken, dealId);
+        
+        // Fetch deal products
+        let dealProducts = [];
+        try {
+            logProcessing(req, 'Fetching deal products', { dealId });
+            dealProducts = await pipedriveApiService.getDealProducts(apiDomain, accessToken, dealId);
+            logProcessing(req, 'Deal products retrieved', { 
+                productsCount: dealProducts.length,
+                totalValue: dealProducts.reduce((sum, p) => sum + (p.item_price * p.quantity || 0), 0)
+            });
+        } catch (error) {
+            logWarning(req, 'Could not fetch deal products', { 
+                dealId,
+                error: error.message 
+            });
+        }
 
-        res.json({
+        const responseData = {
             deal: dealDetails,
             person: personDetails,
             organization: orgDetails,
             products: dealProducts
+        };
+
+        logSuccess(req, 'Comprehensive Pipedrive data retrieved successfully', { 
+            dealId,
+            hasPerson: !!personDetails,
+            hasOrganization: !!orgDetails,
+            productsCount: dealProducts.length,
+            responseSize: JSON.stringify(responseData).length
         });
+
+        res.json(responseData);
     } catch (error) {
-        console.error('Error fetching Pipedrive data:', error.response ? error.response.data : error.message);
-        res.status(500).json({ error: 'Failed to fetch Pipedrive data.', details: error.message });
+        // Error will be handled by the error middleware with proper logging
+        throw new Error(`Failed to fetch Pipedrive data: ${error.message}`);
     }
 };

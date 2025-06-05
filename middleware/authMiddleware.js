@@ -5,6 +5,7 @@
  */
 
 import * as tokenService from '../services/secureTokenService.js';
+import logger from '../lib/logger.js';
 
 /**
  * Middleware to check and refresh Pipedrive authentication for a company.
@@ -32,7 +33,7 @@ export const requirePipedriveAuth = async (req, res, next) => {
         const tokenData = await tokenService.getAuthToken(companyId, 'pipedrive');
         
         if (!tokenData || !tokenData.accessToken) {
-            req.log.warn('Pipedrive not authenticated for company', {
+            logger.warn('Pipedrive not authenticated for company', {
                 companyId,
                 hasTokens: !!tokenData
             });
@@ -49,11 +50,11 @@ export const requirePipedriveAuth = async (req, res, next) => {
 
         // Check if token needs refresh
         if (Date.now() >= tokenData.tokenExpiresAt) {
-            req.log.info('Refreshing expired Pipedrive token', { companyId });
+            logger.info('Refreshing expired Pipedrive token', { companyId });
             
             try {
                 const refreshedToken = await tokenService.refreshPipedriveToken(companyId);
-                req.log.info('Successfully refreshed Pipedrive token', { companyId });
+                logger.info('Successfully refreshed Pipedrive token', { companyId });
                 
                 // Attach refreshed tokens to request
                 req.pipedriveAuth = {
@@ -62,7 +63,7 @@ export const requirePipedriveAuth = async (req, res, next) => {
                     companyId: companyId
                 };
             } catch (refreshError) {
-                req.log.error('Failed to refresh Pipedrive token', {
+                logger.error('Failed to refresh Pipedrive token', {
                     companyId,
                     error: refreshError.message
                 });
@@ -88,7 +89,7 @@ export const requirePipedriveAuth = async (req, res, next) => {
         next();
 
     } catch (error) {
-        req.log.error('Error in Pipedrive auth middleware', {
+        logger.error('Error in Pipedrive auth middleware', {
             companyId,
             error: error.message
         });
@@ -124,18 +125,18 @@ export const optionalXeroAuth = async (req, res, next) => {
         const tokenData = await tokenService.getAuthToken(companyId, 'xero');
         
         if (!tokenData || !tokenData.accessToken) {
-            req.log.info('Xero not connected for company', { companyId });
+            logger.info('Xero not connected for company', { companyId });
             req.xeroAuth = null;
             return next();
         }
 
         // Check if token needs refresh
         if (Date.now() >= tokenData.tokenExpiresAt) {
-            req.log.info('Refreshing expired Xero token', { companyId });
+            logger.info('Refreshing expired Xero token', { companyId });
             
             try {
                 const refreshedToken = await tokenService.refreshXeroToken(companyId);
-                req.log.info('Successfully refreshed Xero token', { companyId });
+                logger.info('Successfully refreshed Xero token', { companyId });
                 
                 // Attach refreshed tokens to request
                 req.xeroAuth = {
@@ -144,7 +145,7 @@ export const optionalXeroAuth = async (req, res, next) => {
                     companyId: companyId
                 };
             } catch (refreshError) {
-                req.log.warn('Failed to refresh Xero token', {
+                logger.warn('Failed to refresh Xero token', {
                     companyId,
                     error: refreshError.message
                 });
@@ -163,7 +164,7 @@ export const optionalXeroAuth = async (req, res, next) => {
         next();
 
     } catch (error) {
-        req.log.error('Error in Xero auth middleware', {
+        logger.error('Error in Xero auth middleware', {
             companyId,
             error: error.message
         });
@@ -243,7 +244,7 @@ export const checkAuthRequirements = async (req, res, next) => {
                 : 'All required authentication is available'
         });
     } catch (error) {
-        req.log.error('Error checking auth requirements', {
+        logger.error('Error checking auth requirements', {
             companyId,
             error: error.message
         });

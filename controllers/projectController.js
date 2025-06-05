@@ -9,6 +9,7 @@
 
 import 'dotenv/config';
 import { asyncHandler } from '../middleware/errorHandler.js';
+import logger from '../lib/logger.js';
 import {
     validateProjectCreationRequest,
     validateAndRefreshPipedriveTokens,
@@ -30,12 +31,13 @@ import {
  * @throws {Error} Returns 400 for validation errors, 404 for missing deals, 500 for system errors
  */
 export const createFullProject = asyncHandler(async (req, res) => {
-    req.log.info('Starting full project creation', {
+    logger.info({
+        operation: 'Create Full Project',
         pipedriveDealId: req.body.pipedriveDealId,
         pipedriveCompanyId: req.body.pipedriveCompanyId,
         existingProjectNumberToLink: req.body.existingProjectNumberToLink,
         userAgent: req.get('User-Agent')
-    });
+    }, '🚀 Starting full project creation');
 
     try {
         // Step 1: Validate request parameters
@@ -96,12 +98,13 @@ export const createFullProject = asyncHandler(async (req, res) => {
             }
         };
 
-        req.log.info('Project creation completed successfully', {
+        logger.info({
+            operation: 'Project Creation Success',
             dealId,
             companyId,
             projectNumber,
             xeroIntegrated: xeroResult.projectCreated
-        });
+        }, '✅ Project creation completed successfully');
 
         res.status(201).json(responseData);
 
@@ -123,13 +126,14 @@ export const createFullProject = asyncHandler(async (req, res) => {
             errorResponse.details = error.details;
         }
 
-        req.log.error(error, {
+        logger.error({
+            operation: 'Project Creation Error',
             pipedriveDealId: req.body.pipedriveDealId,
             pipedriveCompanyId: req.body.pipedriveCompanyId,
             statusCode,
             errorName: error.name,
             errorMessage: error.message
-        }, 'Error in createFullProject controller');
+        }, `❌ Error in createFullProject controller: ${error.message}`);
         
         res.status(statusCode).json(errorResponse);
     }

@@ -20,6 +20,7 @@ import * as tokenService from '../services/secureTokenService.js';
 import * as pipedriveApiService from '../services/pipedriveApiService.js';
 import * as xeroApiService from '../services/xeroApiService.js';
 import { getNextProjectNumber } from '../models/projectSequenceModel.js';
+import logger from '../lib/logger.js';
 
 /**
  * Validates and refreshes Pipedrive authentication tokens for a company
@@ -30,10 +31,10 @@ import { getNextProjectNumber } from '../models/projectSequenceModel.js';
  * @throws {Error} Throws error with status code for authentication failures
  */
 export async function validateAndRefreshPipedriveTokens(companyId, req) {
-    let companyTokens = tokenService.allCompanyTokens[companyId];
+    let companyTokens = await tokenService.getAuthToken(companyId, 'pipedrive');
     
     if (!companyTokens || !companyTokens.accessToken) {
-        req.log.error('Pipedrive not authenticated for company', {
+        logger.error('Pipedrive not authenticated for company', {
             companyId,
             hasTokens: !!companyTokens,
             hasAccessToken: !!(companyTokens?.accessToken)
@@ -45,12 +46,12 @@ export async function validateAndRefreshPipedriveTokens(companyId, req) {
 
     // Check if token needs refresh
     if (Date.now() >= companyTokens.tokenExpiresAt) {
-        req.log.info('Refreshing expired Pipedrive token', { companyId });
+        logger.info('Refreshing expired Pipedrive token', { companyId });
         try {
             companyTokens = await tokenService.refreshPipedriveToken(companyId);
-            req.log.info('Successfully refreshed Pipedrive token', { companyId });
+            logger.info('Successfully refreshed Pipedrive token', { companyId });
         } catch (refreshError) {
-            req.log.error(refreshError, { companyId }, 'Failed to refresh Pipedrive token');
+            logger.error('Failed to refresh Pipedrive token', { companyId, error: refreshError.message });
             const error = new Error(`Failed to refresh Pipedrive token for company ${companyId}. Please re-authenticate.`);
             error.statusCode = 401;
             throw error;
@@ -72,7 +73,7 @@ export function validateProjectCreationRequest(requestBody, req) {
     const { pipedriveDealId, pipedriveCompanyId, existingProjectNumberToLink } = requestBody;
 
     if (!pipedriveDealId || !pipedriveCompanyId) {
-        req.log.warn('Missing required parameters for project creation', {
+        logger.warn('Missing required parameters for project creation', {
             pipedriveDealId: !!pipedriveDealId,
             pipedriveCompanyId: !!pipedriveCompanyId
         });
@@ -111,7 +112,7 @@ export async function fetchAndValidateDeal(apiDomain, accessToken, dealId, req) 
     const departmentName = departmentKey ? dealDetails[departmentKey] : null;
     
     if (!departmentName) {
-        req.log.warn('Deal missing required department field', { dealId, departmentKey });
+        logger.warn('Deal missing required department field', { dealId, departmentKey });
         const error = new Error('Department is required for project number generation. Please ensure the deal has a department specified.');
         error.statusCode = 400;
         error.missingField = 'department';
@@ -139,7 +140,7 @@ export async function generateProjectNumber(dealId, departmentName, existingProj
             existingProjectNumberToLink
         );
         
-        req.log.info('Project number generated successfully', {
+        logger.info('Project number generated successfully', {
             dealId,
             departmentName,
             projectNumber,
@@ -148,7 +149,7 @@ export async function generateProjectNumber(dealId, departmentName, existingProj
         
         return projectNumber;
     } catch (projectError) {
-        req.log.error('Error generating project number', {
+        logger.error('Error generating project number', {
             dealId,
             departmentName,
             error: projectError.message
@@ -173,7 +174,7 @@ export async function generateProjectNumber(dealId, departmentName, existingProj
  */
 export async function createOrFindXeroContact(accessToken, tenantId, dealDetails, pipedriveApiDomain, pipedriveAccessToken, req) {
     if (!dealDetails.org_id || !dealDetails.org_id.value) {
-        req.log.info('No organization associated with deal, skipping Xero contact creation');
+        logger.info('No organization associated with deal, skipping Xero contact creation');
         return null;
     }
 
@@ -185,7 +186,7 @@ export async function createOrFindXeroContact(accessToken, tenantId, dealDetails
         );
         
         if (!orgDetails || !orgDetails.name) {
-            req.log.warn('Organization details incomplete', { orgId: dealDetails.org_id.value });
+            logger.warn('Organization details incomplete', { orgId: dealDetails.org_id.value });
             return null;
         }
 
@@ -197,60 +198,66 @@ export async function createOrFindXeroContact(accessToken, tenantId, dealDetails
         );
         
         if (existingContact) {
-            req.log.info('Found existing Xero contact', { 
+            logger.info('Found existing Xero contact', {
                 contactId: existingContact.ContactID,
-                orgName: orgDetails.name 
+                contactName: existingContact.Name
             });
             return existingContact.ContactID;
         }
 
         // Create new contact
-        const newContactPayload = { Name: orgDetails.name };
+        let personDetails = null;
+        let contactEmail = null;
         
-        // Add primary email from associated person if available
         if (dealDetails.person_id && dealDetails.person_id.value) {
             try {
-                const personDetails = await pipedriveApiService.getPersonDetails(
+                personDetails = await pipedriveApiService.getPersonDetails(
                     pipedriveApiDomain, 
                     pipedriveAccessToken, 
                     dealDetails.person_id.value
                 );
                 
                 if (personDetails && personDetails.email && personDetails.email.length > 0) {
-                    const primaryEmail = personDetails.email.find(e => e.primary);
-                    newContactPayload.EmailAddress = primaryEmail ? primaryEmail.value : personDetails.email[0].value;
+                    contactEmail = personDetails.email[0].value;
                 }
             } catch (personError) {
-                req.log.warn('Could not fetch person details for contact email', { 
+                logger.warn('Could not fetch person details for contact email', {
                     personId: dealDetails.person_id.value,
-                    error: personError.message 
+                    error: personError.message
                 });
             }
         }
+
+        const contactData = {
+            name: orgDetails.name,
+            email: contactEmail,
+            isCustomer: true
+        };
+
+        const newContact = await xeroApiService.createXeroContact(accessToken, tenantId, contactData);
         
-        const createdContact = await xeroApiService.createXeroContact(
-            accessToken,
-            tenantId,
-            newContactPayload
-        );
+        if (newContact && newContact.ContactID) {
+            logger.info('Created new Xero contact', {
+                contactId: newContact.ContactID,
+                contactName: newContact.Name,
+                email: contactEmail
+            });
+            return newContact.ContactID;
+        }
         
-        req.log.info('Created new Xero contact', { 
-            contactId: createdContact.ContactID,
-            orgName: orgDetails.name 
-        });
-        
-        return createdContact.ContactID;
-    } catch (error) {
-        req.log.error('Error creating/finding Xero contact', {
-            orgId: dealDetails.org_id.value,
-            error: error.message
+        return null;
+    } catch (contactError) {
+        logger.error('Error creating/finding Xero contact', {
+            dealId: dealDetails.id,
+            orgId: dealDetails.org_id?.value,
+            error: contactError.message
         });
         return null;
     }
 }
 
 /**
- * Handles Xero project creation with proper token management
+ * Handles Xero integration for project creation
  * 
  * @param {string} companyId - Company ID for token lookup
  * @param {Object} dealDetails - Deal details from Pipedrive
@@ -258,86 +265,312 @@ export async function createOrFindXeroContact(accessToken, tenantId, dealDetails
  * @param {string} dealId - Deal ID
  * @param {string} pipedriveApiDomain - Pipedrive API domain
  * @param {string} pipedriveAccessToken - Pipedrive access token
- * @param {Object} req - Express request object for logging
- * @returns {Promise<Object>} Xero integration result with project, contactId, and error info
+ * @param {Object} req - Express request object for logging and auth
+ * @returns {Promise<Object>} Xero integration result
  */
 export async function handleXeroIntegration(companyId, dealDetails, projectNumber, dealId, pipedriveApiDomain, pipedriveAccessToken, req) {
-    const result = {
-        projectCreated: false,
-        project: null,
-        contactId: null,
-        error: null
-    };
+    // Check if Xero tokens are available (from middleware)
+    if (!req.xeroAuth || !req.xeroAuth.accessToken) {
+        logger.info('Xero integration not available for company', { companyId });
+        return {
+            projectCreated: false,
+            message: 'Xero not authenticated for this company'
+        };
+    }
 
-    const xeroTokenInfo = tokenService.allXeroTokens[companyId];
-    if (!xeroTokenInfo || !xeroTokenInfo.accessToken || !xeroTokenInfo.tenantId) {
-        req.log.info('Xero integration not available for company', { companyId });
-        return result;
+    let xeroAccessToken = req.xeroAuth.accessToken;
+    const xeroTenantId = req.xeroAuth.tenantId;
+    
+    // Check if Xero token needs refresh
+    const xeroTokenData = await tokenService.getAuthToken(companyId, 'xero');
+    if (xeroTokenData && Date.now() >= xeroTokenData.tokenExpiresAt) {
+        logger.info('Refreshing expired Xero token', { companyId });
+        try {
+            const refreshedXeroToken = await tokenService.refreshXeroToken(companyId);
+            xeroAccessToken = refreshedXeroToken.accessToken;
+        } catch (xeroRefreshError) {
+            return {
+                projectCreated: false,
+                error: 'Failed to refresh Xero token',
+                message: 'Xero token expired and refresh failed'
+            };
+        }
     }
 
     try {
-        // Refresh Xero token if needed
-        let currentXeroTokenInfo = xeroTokenInfo;
-        if (Date.now() >= xeroTokenInfo.tokenExpiresAt) {
-            req.log.info('Refreshing expired Xero token', { companyId });
-            currentXeroTokenInfo = await tokenService.refreshXeroToken(companyId);
-        }
-
-        // Create or find Xero contact
+        // Step 1: Create or find Xero contact
         const xeroContactId = await createOrFindXeroContact(
-            currentXeroTokenInfo.accessToken,
-            currentXeroTokenInfo.tenantId,
-            dealDetails,
-            pipedriveApiDomain,
-            pipedriveAccessToken,
+            xeroAccessToken, 
+            xeroTenantId, 
+            dealDetails, 
+            pipedriveApiDomain, 
+            pipedriveAccessToken, 
             req
         );
-
+        
         if (!xeroContactId) {
-            req.log.warn('No Xero contact available, skipping Xero project creation');
-            return result;
+            logger.warn('No Xero contact available, skipping Xero project creation');
+            return {
+                projectCreated: false,
+                message: 'Could not create or find Xero contact for project creation'
+            };
         }
 
-        // Create Xero project
-        const projectName = `${projectNumber} - ${dealDetails.title || 'Project'}`;
+        // Step 2: Create Xero project
+        const vesselNameKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME;
+        const vesselName = vesselNameKey ? dealDetails[vesselNameKey] : 'Unknown Vessel';
+        
         const projectData = {
             contactId: xeroContactId,
-            name: projectName,
+            name: `IPC - ${vesselName}`,
             estimateAmount: dealDetails.value || null,
+            deadline: dealDetails.expected_close_date || null
         };
 
+        logger.info('Creating Xero project', {
+            contactId: xeroContactId,
+            projectName: projectData.name,
+            estimateAmount: projectData.estimateAmount,
+            dealId
+        });
+
         const xeroProject = await xeroApiService.createXeroProject(
-            currentXeroTokenInfo.accessToken,
-            currentXeroTokenInfo.tenantId,
+            xeroAccessToken,
+            xeroTenantId,
             projectData,
-            null,
+            null, // quoteId
             dealId,
             companyId
         );
 
-        req.log.info('Xero project created successfully', {
-            projectId: xeroProject.ProjectID,
-            projectName,
-            contactId: xeroContactId
+        if (!xeroProject || (!xeroProject.ProjectID && !xeroProject.projectId)) {
+            logger.warn('Project creation succeeded but no project ID found', {
+                projectData: projectData,
+                xeroResponse: xeroProject
+            });
+            return {
+                projectCreated: false,
+                error: 'Project creation response missing ProjectID'
+            };
+        }
+
+        const projectId = xeroProject.ProjectID || xeroProject.projectId;
+
+        // Step 3: Create default tasks
+        const defaultTasks = [
+            "manhours",
+            "overtime", 
+            "transport",
+            "supply labour"
+        ];
+
+        logger.info('Starting task creation for project', {
+            projectId,
+            taskCount: defaultTasks.length
         });
 
-        result.projectCreated = true;
-        result.project = xeroProject;
-        result.contactId = xeroContactId;
+        const createdTasks = [];
+        
+        for (const taskName of defaultTasks) {
+            try {
+                logger.info(`Creating task "${taskName}" for project ${projectId}`);
+                
+                const task = await xeroApiService.createXeroTask(
+                    xeroAccessToken,
+                    xeroTenantId,
+                    projectId,
+                    taskName
+                );
+                
+                if (task && (task.TaskID || task.taskId)) {
+                    logger.info(`Task "${taskName}" created successfully`, {
+                        taskId: task.TaskID || task.taskId,
+                        taskName: task.Name || taskName
+                    });
+                    createdTasks.push(task);
+                } else {
+                    logger.warn(`No task data returned for "${taskName}"`, { projectId });
+                }
+            } catch (taskError) {
+                logger.error(`Failed to create task "${taskName}"`, {
+                    projectId,
+                    taskName,
+                    error: taskError.message
+                });
+            }
+        }
 
-    } catch (xeroError) {
-        req.log.error('Failed to create Xero project', {
-            dealId,
+        logger.info(`Task creation completed for project ${projectId}`, {
+            totalTasks: defaultTasks.length,
+            createdTasks: createdTasks.length
+        });
+
+        // Step 4: Handle Xero quote acceptance if quote number exists
+        const xeroQuoteKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY;
+        const xeroQuoteNumber = xeroQuoteKey ? dealDetails[xeroQuoteKey] : null;
+        
+        let quoteAcceptanceResult = null;
+        
+        if (xeroQuoteNumber) {
+            logger.info('Checking for Xero quote to accept', {
+                quoteNumber: xeroQuoteNumber,
+                dealId,
+                projectId
+            });
+            
+            try {
+                // Search for the quote by quote number
+                const quotes = await xeroApiService.getXeroQuotes(
+                    xeroAccessToken,
+                    xeroTenantId,
+                    {
+                        where: `QuoteNumber="${xeroQuoteNumber}"`,
+                        page: 1
+                    }
+                );
+
+                logger.info('Attempting to find and accept Xero quote', { quoteNumber: xeroQuoteNumber });
+                
+                if (!quotes || !Array.isArray(quotes)) {
+                    logger.warn('Invalid quotes response format', {
+                        quoteNumber: xeroQuoteNumber,
+                        quotesType: typeof quotes,
+                        quotesValue: quotes
+                    });
+                    quoteAcceptanceResult = {
+                        accepted: false,
+                        error: 'Invalid quotes response format'
+                    };
+                } else {
+                    logger.info('Quote search result', {
+                        quoteNumber: xeroQuoteNumber,
+                        foundQuotes: quotes.length,
+                        quotes: quotes.map(q => ({
+                            QuoteID: q.QuoteID,
+                            QuoteNumber: q.QuoteNumber,
+                            Status: q.Status
+                        }))
+                    });
+
+                    const targetQuote = quotes.find(quote => quote.QuoteNumber === xeroQuoteNumber);
+                    
+                    if (targetQuote) {
+                        if (targetQuote.Status === 'ACCEPTED') {
+                            logger.info('Quote is already accepted, skipping update', {
+                                quoteId: targetQuote.QuoteID,
+                                quoteNumber: xeroQuoteNumber
+                            });
+                            quoteAcceptanceResult = {
+                                accepted: true,
+                                alreadyAccepted: true,
+                                quoteId: targetQuote.QuoteID
+                            };
+                        } else {
+                            // Update quote status to ACCEPTED
+                            const quoteUpdateData = {
+                                QuoteID: targetQuote.QuoteID,
+                                Status: 'ACCEPTED'
+                            };
+
+                            logger.info('Accepting Xero quote', {
+                                quoteId: targetQuote.QuoteID,
+                                quoteNumber: xeroQuoteNumber,
+                                currentStatus: targetQuote.Status
+                            });
+
+                            try {
+                                const updatedQuote = await xeroApiService.updateQuoteStatus(
+                                    xeroAccessToken,
+                                    xeroTenantId,
+                                    targetQuote.QuoteID,
+                                    'ACCEPTED'
+                                );
+
+                                logger.info('Xero quote accepted successfully', {
+                                    quoteId: targetQuote.QuoteID,
+                                    quoteNumber: xeroQuoteNumber,
+                                    newStatus: updatedQuote?.Status || 'ACCEPTED'
+                                });
+
+                                quoteAcceptanceResult = {
+                                    accepted: true,
+                                    quoteId: targetQuote.QuoteID,
+                                    previousStatus: targetQuote.Status,
+                                    newStatus: updatedQuote?.Status || 'ACCEPTED'
+                                };
+                            } catch (updateError) {
+                                logger.error('Failed to update quote status', {
+                                    quoteId: targetQuote.QuoteID,
+                                    quoteNumber: xeroQuoteNumber,
+                                    error: updateError.message
+                                });
+                                quoteAcceptanceResult = {
+                                    accepted: false,
+                                    error: updateError.message
+                                };
+                            }
+                        }
+                    } else {
+                        logger.warn('Xero quote not found', {
+                            quoteNumber: xeroQuoteNumber,
+                            searchedQuotes: quotes.map(q => q.QuoteNumber)
+                        });
+                        quoteAcceptanceResult = {
+                            accepted: false,
+                            error: 'Quote not found'
+                        };
+                    }
+                }
+            } catch (quoteError) {
+                logger.error('Failed to accept Xero quote', {
+                    quoteNumber: xeroQuoteNumber,
+                    dealId,
+                    projectId,
+                    error: quoteError.message
+                });
+                quoteAcceptanceResult = {
+                    accepted: false,
+                    error: quoteError.message
+                };
+            }
+        } else {
+            logger.info('No Xero quote number provided, skipping quote acceptance', {
+                dealId,
+                projectId
+            });
+        }
+
+        logger.info('Xero project created successfully', {
+            projectId: projectId,
+            projectName: projectData.name,
+            contactId: xeroContactId,
+            tasksCreated: createdTasks.length,
+            quoteAccepted: quoteAcceptanceResult?.accepted || false
+        });
+
+        return {
+            projectCreated: true,
+            projectId: projectId,
+            projectName: projectData.name,
+            contactId: xeroContactId,
+            tasks: createdTasks,
+            quote: quoteAcceptanceResult
+        };
+
+    } catch (error) {
+        logger.error('Failed to create Xero project', {
             companyId,
+            dealId,
             projectNumber,
-            error: xeroError.message,
-            status: xeroError.response?.status
+            error: error.message
         });
         
-        result.error = `${xeroError.message} (Status: ${xeroError.response?.status || 'Unknown'})`;
+        return {
+            projectCreated: false,
+            error: error.message,
+            message: 'Xero project creation failed'
+        };
     }
-
-    return result;
 }
 
 /**
@@ -345,105 +578,98 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
  * 
  * @param {string} apiDomain - Pipedrive API domain
  * @param {string} accessToken - Pipedrive access token
- * @param {Object} dealDetails - Deal details
+ * @param {Object} dealDetails - Deal details object
  * @param {string} dealId - Deal ID
  * @param {Object} req - Express request object for logging
  * @returns {Promise<Object>} Comprehensive deal data including person, organization, and products
  */
 export async function fetchDealRelatedData(apiDomain, accessToken, dealDetails, dealId, req) {
-    const result = {
-        personDetails: null,
-        orgDetails: null,
-        dealProducts: []
-    };
+    let personDetails = null;
+    let orgDetails = null;
+    let dealProducts = [];
 
-    // Fetch person details
+    // Fetch person details if available
     if (dealDetails.person_id && dealDetails.person_id.value) {
         try {
-            result.personDetails = await pipedriveApiService.getPersonDetails(
+            personDetails = await pipedriveApiService.getPersonDetails(
                 apiDomain, 
                 accessToken, 
                 dealDetails.person_id.value
             );
-        } catch (error) {
-            req.log.warn('Could not fetch person details', {
+        } catch (personError) {
+            logger.warn('Could not fetch person details', {
                 personId: dealDetails.person_id.value,
-                error: error.message
+                error: personError.message
             });
         }
     }
 
-    // Fetch organization details
+    // Fetch organization details if available
     if (dealDetails.org_id && dealDetails.org_id.value) {
         try {
-            result.orgDetails = await pipedriveApiService.getOrganizationDetails(
+            orgDetails = await pipedriveApiService.getOrganizationDetails(
                 apiDomain, 
                 accessToken, 
                 dealDetails.org_id.value
             );
-        } catch (error) {
-            req.log.warn('Could not fetch organization details', {
+        } catch (orgError) {
+            logger.warn('Could not fetch organization details', {
                 orgId: dealDetails.org_id.value,
-                error: error.message
+                error: orgError.message
             });
         }
     }
 
     // Fetch deal products
     try {
-        result.dealProducts = await pipedriveApiService.getDealProducts(apiDomain, accessToken, dealId);
-    } catch (error) {
-        req.log.warn('Could not fetch deal products', {
+        dealProducts = await pipedriveApiService.getDealProducts(apiDomain, accessToken, dealId);
+    } catch (productsError) {
+        logger.warn('Could not fetch deal products', {
             dealId,
-            error: error.message
+            error: productsError.message
         });
     }
 
-    return result;
+    return { personDetails, orgDetails, dealProducts };
 }
 
 /**
- * Updates Pipedrive deal with the generated project number
+ * Updates the Pipedrive deal with the generated project number
  * 
  * @param {string} apiDomain - Pipedrive API domain
  * @param {string} accessToken - Pipedrive access token
  * @param {string} dealId - Deal ID to update
- * @param {string} projectNumber - Project number to set
+ * @param {string} projectNumber - Project number to add to deal
  * @param {Object} req - Express request object for logging
- * @returns {Promise<void>}
+ * @returns {Promise<void>} Updates deal or logs warning on failure
  */
 export async function updateDealWithProjectNumber(apiDomain, accessToken, dealId, projectNumber, req) {
     try {
         await pipedriveApiService.updateDealWithProjectNumber(apiDomain, accessToken, dealId, projectNumber);
-        req.log.info('Successfully updated deal with project number', { dealId, projectNumber });
+        logger.info('Successfully updated deal with project number', { dealId, projectNumber });
     } catch (updateError) {
-        req.log.warn('Failed to update Pipedrive deal with project number', {
+        logger.warn('Failed to update Pipedrive deal with project number', {
             dealId,
             projectNumber,
             error: updateError.message
         });
+        // Don't throw error - project creation should still succeed
     }
 }
 
 /**
- * Creates enhanced deal object with custom fields and project number
+ * Creates an enhanced deal object with department and project information
  * 
- * @param {Object} dealDetails - Original deal details
+ * @param {Object} dealDetails - Original deal details from Pipedrive
  * @param {string} departmentName - Department name
  * @param {string} projectNumber - Generated project number
- * @returns {Object} Enhanced deal object with custom fields
+ * @returns {Object} Enhanced deal object for frontend consumption
  */
 export function createEnhancedDealObject(dealDetails, departmentName, projectNumber) {
-    const vesselNameKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME;
-    const salesInChargeKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_SALES_IN_CHARGE;
-    const locationKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_LOCATION;
-
     return {
         ...dealDetails,
         department: departmentName,
-        vessel_name: vesselNameKey ? (dealDetails[vesselNameKey] || null) : null,
-        sales_in_charge: salesInChargeKey ? (dealDetails[salesInChargeKey] || null) : null,
-        location: locationKey ? (dealDetails[locationKey] || null) : null,
-        projectNumber: projectNumber
+        projectNumber: projectNumber,
+        enhancedAt: new Date().toISOString()
     };
 }

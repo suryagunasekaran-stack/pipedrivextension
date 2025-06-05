@@ -9,6 +9,7 @@ import crypto from 'crypto';
 import axios from 'axios';
 import * as tokenService from '../services/secureTokenService.js';
 import * as pipedriveApiService from '../services/pipedriveApiService.js';
+import logger from '../lib/logger.js';
 
 const pipedriveClientId = process.env.CLIENT_ID;
 const pipedriveClientSecret = process.env.CLIENT_SECRET;
@@ -33,10 +34,11 @@ const xeroErrorPageUrl = `${frontendBaseUrl}/auth/xero/error`;
  * @returns {void} Redirects to frontend auth page with authorization URL
  */
 export const initiatePipedriveAuth = (req, res) => {
-    req.log.info('Initiating Pipedrive OAuth flow', {
+    logger.info({
+        operation: 'Initiate Pipedrive Auth',
         userAgent: req.get('User-Agent'),
         remoteAddress: req.ip
-    });
+    }, '🚀 Initiating Pipedrive OAuth flow');
 
     const csrfToken = crypto.randomBytes(18).toString('hex');
     tokenService.setCsrfTokenStore(csrfToken);
@@ -48,11 +50,12 @@ export const initiatePipedriveAuth = (req, res) => {
 
     const authorizationUrl = `https://oauth.pipedrive.com/oauth/authorize?client_id=${pipedriveClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${csrfToken}&scope=${encodeURIComponent(scopes)}`;
     
-    req.log.info('Pipedrive OAuth URL generated', {
+    logger.info({
+        operation: 'Pipedrive Auth URL Generated',
         csrfToken,
         scopes: scopes.split(' '),
         redirectUri
-    });
+    }, '🔗 Pipedrive OAuth URL generated');
     
     // Redirect to frontend auth page with the authorization URL
     const frontendAuthUrl = `${pipedriveAuthPageUrl}?authUrl=${encodeURIComponent(authorizationUrl)}`;
@@ -73,22 +76,26 @@ export const handlePipedriveCallback = async (req, res) => {
     const { code, state } = req.query;
     const storedCsrfToken = tokenService.getCsrfTokenStore();
 
-    req.log.info('Handling Pipedrive OAuth callback', {
+    logger.info({
+        operation: 'Handle Pipedrive Callback',
         hasCode: !!code,
         hasState: !!state,
         stateMatches: state === storedCsrfToken
-    });
+    }, '🔄 Handling Pipedrive OAuth callback');
 
     if (state !== storedCsrfToken) {
-        req.log.warn('CSRF token mismatch in Pipedrive callback', {
+        logger.warn({
+            operation: 'CSRF Mismatch',
             receivedState: state,
             expectedState: storedCsrfToken
-        });
+        }, '⚠️ CSRF token mismatch in Pipedrive callback');
         return res.redirect(`${pipedriveErrorPageUrl}?error=${encodeURIComponent('CSRF token mismatch')}`);
     }
 
     if (!code) {
-        req.log.error('No authorization code received in Pipedrive callback');
+        logger.error({
+            operation: 'Missing Auth Code'
+        }, '❌ No authorization code received in Pipedrive callback');
         return res.redirect(`${pipedriveErrorPageUrl}?error=${encodeURIComponent('Authorization code is missing')}`);
     }
 
@@ -119,18 +126,20 @@ export const handlePipedriveCallback = async (req, res) => {
             tokenExpiresAt: Date.now() + (expires_in * 1000) - (5 * 60 * 1000) // 5-minute buffer before expiry
         });
 
-        req.log.info('Pipedrive authentication successful', {
+        logger.info({
+            operation: 'Pipedrive Auth Success',
             companyId: companyIdForTokenStorage,
             apiDomain: api_domain
-        });
+        }, '✅ Pipedrive authentication successful');
 
         // Redirect to success page after successful authentication
         res.redirect(`${pipedriveSuccessPageUrl}?companyId=${encodeURIComponent(companyIdForTokenStorage)}`);
 
     } catch (error) {
-        req.log.error('Error during Pipedrive OAuth callback', {
+        logger.error({
+            operation: 'Pipedrive Auth Error',
             error: error.response ? error.response.data : error.message
-        });
+        }, `❌ Error during Pipedrive OAuth callback: ${error.message}`);
         
         const errorMessage = error.response?.data?.error_description || error.message || 'Authentication failed';
         res.redirect(`${pipedriveErrorPageUrl}?error=${encodeURIComponent(errorMessage)}`);
@@ -149,8 +158,16 @@ export const initiateXeroAuth = (req, res) => {
     const { pipedriveCompanyId } = req.query;
 
     if (!pipedriveCompanyId) {
+        logger.warn({
+            operation: 'Xero Auth Missing Company ID'
+        }, '⚠️ Pipedrive Company ID is required to connect to Xero');
         return res.status(400).send('Pipedrive Company ID is required to connect to Xero.');
     }
+
+    logger.info({
+        operation: 'Initiate Xero Auth',
+        pipedriveCompanyId
+    }, '🚀 Initiating Xero OAuth flow');
 
     const csrfToken = crypto.randomBytes(18).toString('hex');
     let xeroCsrfStore = tokenService.getXeroCsrfTokenStore();
@@ -168,6 +185,13 @@ export const initiateXeroAuth = (req, res) => {
     ].join(' ');
 
     const authorizationUrl = `https://login.xero.com/identity/connect/authorize?response_type=code&client_id=${xeroClientId}&redirect_uri=${encodeURIComponent(xeroRedirectUri)}&scope=${encodeURIComponent(scopes)}&state=${csrfToken}`;
+    
+    logger.info({
+        operation: 'Xero Auth URL Generated',
+        csrfToken,
+        scopes: scopes.split(' ')
+    }, '🔗 Xero OAuth URL generated');
+    
     res.redirect(authorizationUrl);
 };
 
@@ -186,21 +210,27 @@ export const handleXeroCallback = async (req, res) => {
     let xeroCsrfStore = tokenService.getXeroCsrfTokenStore();
     const pipedriveCompanyId = xeroCsrfStore[state];
 
-    req.log.info('Handling Xero OAuth callback', {
+    logger.info({
+        operation: 'Handle Xero Callback',
         hasCode: !!code,
         hasState: !!state,
         pipedriveCompanyId: pipedriveCompanyId
-    });
+    }, '🔄 Handling Xero OAuth callback');
 
     if (!pipedriveCompanyId) {
-        req.log.error('CSRF token mismatch or Pipedrive Company ID not found for state:', state);
+        logger.error({
+            operation: 'Xero CSRF Mismatch',
+            state
+        }, '❌ CSRF token mismatch or Pipedrive Company ID not found');
         return res.redirect(`${xeroErrorPageUrl}?error=${encodeURIComponent('CSRF token mismatch or session expired')}`);
     }
     delete xeroCsrfStore[state];
     tokenService.setXeroCsrfTokenStore(xeroCsrfStore);
 
     if (!code) {
-        req.log.error('No authorization code received in Xero callback');
+        logger.error({
+            operation: 'Xero Missing Auth Code'
+        }, '❌ No authorization code received in Xero callback');
         return res.redirect(`${xeroErrorPageUrl}?error=${encodeURIComponent('Authorization code is missing from Xero callback')}`);
     }
 
@@ -225,30 +255,30 @@ export const handleXeroCallback = async (req, res) => {
         const connections = await (await import('../services/xeroApiService.js')).getXeroConnections(access_token);
         const tenantId = connections[0].tenantId;
 
-        tokenService.allXeroTokens[pipedriveCompanyId] = {
+        // Store Xero tokens using the secure token service
+        await tokenService.storeAuthToken(pipedriveCompanyId, 'xero', {
             accessToken: access_token,
             refreshToken: refresh_token,
             tokenExpiresAt: Date.now() + (expires_in * 1000) - (5 * 60 * 1000), // 5-minute buffer before expiry
-            tenantId: tenantId,
-            scopes: scope
-        };
-
-        await tokenService.saveAllXeroTokensToFile();
-
-        req.log.info('Xero authentication successful', {
-            pipedriveCompanyId: pipedriveCompanyId,
             tenantId: tenantId
         });
+
+        logger.info({
+            operation: 'Xero Auth Success',
+            pipedriveCompanyId: pipedriveCompanyId,
+            tenantId: tenantId
+        }, '✅ Xero authentication successful');
 
         // Redirect to success page with company and tenant info
         const successUrl = `${xeroSuccessPageUrl}?companyId=${encodeURIComponent(pipedriveCompanyId)}&tenantId=${encodeURIComponent(tenantId)}`;
         res.redirect(successUrl);
 
     } catch (error) {
-        req.log.error('Error during Xero OAuth callback', {
+        logger.error({
+            operation: 'Xero Auth Error',
             pipedriveCompanyId: pipedriveCompanyId,
             error: error.response ? error.response.data : error.message
-        });
+        }, `❌ Error during Xero OAuth callback: ${error.message}`);
         
         const errorMessage = error.response?.data?.error_description || error.message || 'Xero authentication failed';
         res.redirect(`${xeroErrorPageUrl}?error=${encodeURIComponent(errorMessage)}&companyId=${encodeURIComponent(pipedriveCompanyId || '')}`);
@@ -264,9 +294,10 @@ export const handleXeroCallback = async (req, res) => {
  * @returns {void} Returns JSON with authorization URL
  */
 export const getPipedriveAuthUrl = (req, res) => {
-    req.log.info('Generating Pipedrive OAuth URL for frontend', {
+    logger.info({
+        operation: 'Generate Pipedrive Auth URL',
         userAgent: req.get('User-Agent')
-    });
+    }, '🔗 Generating Pipedrive OAuth URL for frontend');
 
     const csrfToken = crypto.randomBytes(18).toString('hex');
     tokenService.setCsrfTokenStore(csrfToken);
@@ -278,10 +309,11 @@ export const getPipedriveAuthUrl = (req, res) => {
 
     const authorizationUrl = `https://oauth.pipedrive.com/oauth/authorize?client_id=${pipedriveClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${csrfToken}&scope=${encodeURIComponent(scopes)}`;
     
-    req.log.info('Pipedrive OAuth URL generated for API response', {
+    logger.info({
+        operation: 'Pipedrive Auth URL Generated',
         csrfToken,
         scopes: scopes.split(' ')
-    });
+    }, '✅ Pipedrive OAuth URL generated for API response');
     
     res.json({
         success: true,
@@ -304,6 +336,9 @@ export const checkAuthStatus = async (req, res) => {
     const companyId = req.query.companyId || req.body.companyId;
 
     if (!companyId) {
+        logger.warn({
+            operation: 'Check Auth Status - Missing Company ID'
+        }, '⚠️ Company ID is required for auth status check');
         return res.status(400).json({
             success: false,
             error: 'Company ID is required',
@@ -340,23 +375,25 @@ export const checkAuthStatus = async (req, res) => {
         authStatus.pipedrive.needsRefresh = authStatus.pipedrive.authenticated && authStatus.pipedrive.tokenExpired;
         authStatus.xero.needsRefresh = authStatus.xero.authenticated && authStatus.xero.tokenExpired;
 
-        req.log.info('Auth status checked', {
+        logger.info({
+            operation: 'Auth Status Check',
             companyId,
             pipedriveAuth: authStatus.pipedrive.authenticated,
             xeroAuth: authStatus.xero.authenticated,
             pipedriveExpired: authStatus.pipedrive.tokenExpired,
             xeroExpired: authStatus.xero.tokenExpired
-        });
+        }, '✅ Auth status checked successfully');
 
         res.json({
             success: true,
             data: authStatus
         });
     } catch (error) {
-        req.log.error('Error checking auth status', {
+        logger.error({
+            operation: 'Auth Status Check Error',
             companyId,
             error: error.message
-        });
+        }, `❌ Error checking auth status: ${error.message}`);
 
         res.status(500).json({
             success: false,
@@ -376,6 +413,9 @@ export const logout = async (req, res) => {
     const { companyId } = req.body;
 
     if (!companyId) {
+        logger.warn({
+            operation: 'Logout - Missing Company ID'
+        }, '⚠️ Company ID is required for logout');
         return res.status(400).json({
             success: false,
             error: 'Company ID is required'
@@ -387,9 +427,10 @@ export const logout = async (req, res) => {
         await tokenService.deactivateAuthToken(companyId, 'pipedrive');
         await tokenService.deactivateAuthToken(companyId, 'xero');
 
-        req.log.info('User logged out successfully', {
+        logger.info({
+            operation: 'User Logout',
             companyId
-        });
+        }, '✅ User logged out successfully');
 
         res.json({
             success: true,
@@ -397,10 +438,11 @@ export const logout = async (req, res) => {
         });
 
     } catch (error) {
-        req.log.error('Error during logout', {
+        logger.error({
+            operation: 'Logout Error',
             companyId,
             error: error.message
-        });
+        }, `❌ Error during logout: ${error.message}`);
 
         res.status(500).json({
             success: false,
