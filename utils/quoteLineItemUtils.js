@@ -5,6 +5,7 @@
  */
 export function validateLineItem(lineItem) {
   if (!lineItem || typeof lineItem !== 'object') return false;
+  if (typeof lineItem.description !== 'string' || !lineItem.description.trim()) return false;
   if (typeof lineItem.quantity !== 'number' || typeof lineItem.unitAmount !== 'number') return false;
   if (lineItem.quantity <= 0 || lineItem.unitAmount < 0) return false;
   // Optional: check discount fields if present

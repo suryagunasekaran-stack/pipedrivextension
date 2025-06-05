@@ -19,7 +19,7 @@ export function validateProjectCreation(deal) {
   }
 
   // Check for vessel name
-  if (!deal[process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME]) {
+  if (!deal[process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME] || deal[process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME] === null) {
     throw new Error('Vessel name is required for project creation');
   }
 
@@ -35,21 +35,37 @@ export function validateProjectCreation(deal) {
  * @throws {Error} - If project number is invalid or duplicate
  */
 export function validateProjectNumberAssignment(projectNumber, existingProjectNumbers = [], deal = null) {
+  if (!projectNumber) {
+    throw new Error('Project number is required');
+  }
+
+  if (typeof projectNumber !== 'string') {
+    throw new Error('Project number must be a string');
+  }
+
   // Validate format
   if (!validateProjectNumber(projectNumber)) {
     throw new Error('Invalid project number format');
   }
 
   // Check for duplicates
-  if (existingProjectNumbers.includes(projectNumber)) {
+  if (existingProjectNumbers && existingProjectNumbers.includes(projectNumber)) {
     throw new Error('Project number already exists');
   }
 
   // Validate department code if deal is provided
   if (deal) {
+    if (typeof deal !== 'object') {
+      throw new Error('Deal must be an object');
+    }
+
     const departmentCode = projectNumber.slice(0, 2);
     const dealDepartment = deal[process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT];
     
+    if (!dealDepartment) {
+      throw new Error('Deal department is required for project number validation');
+    }
+
     // Map department name to code (this would be expanded based on your department mapping)
     const departmentCodeMap = {
       'New York': 'NY',
@@ -72,13 +88,29 @@ export function validateProjectNumberAssignment(projectNumber, existingProjectNu
  * @throws {Error} - If deal data is invalid
  */
 export function validateDealForProject(deal) {
+  if (!deal) {
+    throw new Error('Deal is required');
+  }
+
+  if (typeof deal !== 'object') {
+    throw new Error('Deal must be an object');
+  }
+
   // Validate deal value
-  if (deal.value <= 0) {
-    throw new Error('Deal value must be positive');
+  if (deal.value === undefined || deal.value === null) {
+    throw new Error('Deal value is required');
+  }
+
+  if (typeof deal.value !== 'number' || deal.value <= 0) {
+    throw new Error('Deal value must be a positive number');
   }
 
   // Validate expected close date
   if (deal.expected_close_date) {
+    if (typeof deal.expected_close_date !== 'string') {
+      throw new Error('Expected close date must be a string');
+    }
+
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
     if (!dateRegex.test(deal.expected_close_date)) {
       throw new Error('Invalid expected close date format');
@@ -95,7 +127,7 @@ export function validateDealForProject(deal) {
     throw new Error('Department is required for project creation');
   }
 
-  if (!deal[process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME]) {
+  if (!deal[process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME] || deal[process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME] === null) {
     throw new Error('Vessel name is required for project creation');
   }
 

@@ -54,19 +54,19 @@ describe('Quote Line Item Validation', () => {
     test('should calculate correct line item total', () => {
       const testCases = [
         {
-          input: { quantity: 2, unitAmount: 100.50 },
+          input: { description: 'Test', quantity: 2, unitAmount: 100.50 },
           expected: 201.00
         },
         {
-          input: { quantity: 1, unitAmount: 99.99 },
+          input: { description: 'Test', quantity: 1, unitAmount: 99.99 },
           expected: 99.99
         },
         {
-          input: { quantity: 3, unitAmount: 50.00, discountRate: 10 },
+          input: { description: 'Test', quantity: 3, unitAmount: 50.00, discountRate: 10 },
           expected: 135.00 // 150 - 15 (10% discount)
         },
         {
-          input: { quantity: 2, unitAmount: 100.00, discountAmount: 20.00 },
+          input: { description: 'Test', quantity: 2, unitAmount: 100.00, discountAmount: 20.00 },
           expected: 180.00 // 200 - 20 (fixed discount)
         }
       ];
@@ -79,11 +79,11 @@ describe('Quote Line Item Validation', () => {
     test('should handle decimal precision correctly', () => {
       const testCases = [
         {
-          input: { quantity: 2, unitAmount: 100.555 },
+          input: { description: 'Test', quantity: 2, unitAmount: 100.555 },
           expected: 201.11 // Rounded to 2 decimal places
         },
         {
-          input: { quantity: 3, unitAmount: 33.333 },
+          input: { description: 'Test', quantity: 3, unitAmount: 33.333 },
           expected: 100.00 // Rounded to 2 decimal places
         }
       ];

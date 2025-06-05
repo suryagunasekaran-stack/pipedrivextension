@@ -28,5 +28,7 @@ export default {
   clearMocks: true,
   
   // Transform configuration for ES modules
-  transform: {}
+  transform: {
+    '^.+\\.js$': ['babel-jest', { presets: ['@babel/preset-env'] }]
+  }
 }; 

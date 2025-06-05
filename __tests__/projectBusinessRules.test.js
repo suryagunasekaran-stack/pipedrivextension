@@ -1,5 +1,11 @@
 import { validateProjectCreation, validateProjectNumberAssignment, validateDealForProject } from '../utils/projectBusinessRules';
 
+beforeAll(() => {
+  process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT = 'department';
+  process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME = 'vessel_name';
+  process.env.PIPEDRIVE_PROJECT_NUMBER_CUSTOM_FIELD_KEY = 'project_number';
+});
+
 describe('Project Creation Business Rules', () => {
   describe('validateProjectCreation', () => {
     test('should prevent project creation for deal with existing project', () => {
@@ -50,6 +56,15 @@ describe('Project Creation Business Rules', () => {
   });
 
   describe('validateProjectNumberAssignment', () => {
+    test('should throw error for missing or invalid project number', () => {
+      expect(() => validateProjectNumberAssignment())
+        .toThrow('Project number is required');
+      expect(() => validateProjectNumberAssignment(null))
+        .toThrow('Project number is required');
+      expect(() => validateProjectNumberAssignment(123))
+        .toThrow('Project number must be a string');
+    });
+
     test('should prevent duplicate project number assignment', () => {
       const existingProjectNumbers = ['NY25001', 'NY25002'];
       const newProjectNumber = 'NY25001';
@@ -87,9 +102,31 @@ describe('Project Creation Business Rules', () => {
       expect(() => validateProjectNumberAssignment(projectNumber, [], deal))
         .toThrow('Project number department code does not match deal department');
     });
+
+    test('should throw error for invalid deal object', () => {
+      const projectNumber = 'NY25001';
+      expect(() => validateProjectNumberAssignment(projectNumber, [], 'not an object'))
+        .toThrow('Deal must be an object');
+    });
+
+    test('should throw error for missing deal department', () => {
+      const projectNumber = 'NY25001';
+      const deal = {};
+      expect(() => validateProjectNumberAssignment(projectNumber, [], deal))
+        .toThrow('Deal department is required for project number validation');
+    });
   });
 
   describe('validateDealForProject', () => {
+    test('should throw error for missing or invalid deal', () => {
+      expect(() => validateDealForProject())
+        .toThrow('Deal is required');
+      expect(() => validateDealForProject(null))
+        .toThrow('Deal is required');
+      expect(() => validateDealForProject('not an object'))
+        .toThrow('Deal must be an object');
+    });
+
     test('should validate deal has required fields for project', () => {
       const validDeal = {
         id: '123',
@@ -103,16 +140,23 @@ describe('Project Creation Business Rules', () => {
       expect(validateDealForProject(validDeal)).toBe(true);
     });
 
-    test('should validate deal value is positive', () => {
-      const dealWithNegativeValue = {
-        id: '123',
-        value: -1000,
-        [process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT]: 'New York',
-        [process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME]: 'Vessel 1'
-      };
+    test('should validate deal value is positive number', () => {
+      const invalidDeals = [
+        { value: -1000 },
+        { value: 0 },
+        { value: '1000' },
+        { value: null },
+        { value: undefined }
+      ];
 
-      expect(() => validateDealForProject(dealWithNegativeValue))
-        .toThrow('Deal value must be positive');
+      invalidDeals.forEach(deal => {
+        expect(() => validateDealForProject({
+          ...deal,
+          [process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT]: 'New York',
+          [process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME]: 'Vessel 1',
+          org_id: { value: '456' }
+        })).toThrow(/Deal value must be a positive number|Deal value is required/);
+      });
     });
 
     test('should validate expected close date format', () => {
@@ -121,11 +165,24 @@ describe('Project Creation Business Rules', () => {
         value: 1000,
         expected_close_date: 'invalid-date',
         [process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT]: 'New York',
-        [process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME]: 'Vessel 1'
+        [process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME]: 'Vessel 1',
+        org_id: { value: '456' }
       };
 
       expect(() => validateDealForProject(dealWithInvalidDate))
         .toThrow('Invalid expected close date format');
+
+      const dealWithNonStringDate = {
+        id: '123',
+        value: 1000,
+        expected_close_date: 123,
+        [process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT]: 'New York',
+        [process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME]: 'Vessel 1',
+        org_id: { value: '456' }
+      };
+
+      expect(() => validateDealForProject(dealWithNonStringDate))
+        .toThrow('Expected close date must be a string');
     });
 
     test('should validate organization association', () => {

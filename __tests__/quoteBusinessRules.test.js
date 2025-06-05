@@ -158,6 +158,31 @@ describe('Quote Creation Business Rules', () => {
       expect(lineItems[1].UnitAmount).toBe(150);
       expect(lineItems[1].LineAmount).toBe(150);
     });
+
+    test('should throw error for missing or invalid products array', () => {
+      expect(() => mapProductsToLineItems())
+        .toThrow('Products array is required');
+      expect(() => mapProductsToLineItems(null))
+        .toThrow('Products array is required');
+      expect(() => mapProductsToLineItems('not an array'))
+        .toThrow('Products must be an array');
+    });
+
+    test('should throw error for invalid product data', () => {
+      const invalidProducts = [
+        null,
+        undefined,
+        { id: 1 }, // Missing name, quantity, and price
+        { name: 'Product 1' }, // Missing quantity and price
+        { quantity: 1 }, // Missing name and price
+        { item_price: 100 } // Missing name and quantity
+      ];
+
+      invalidProducts.forEach(product => {
+        expect(() => mapProductsToLineItems([product]))
+          .toThrow('Invalid product data');
+      });
+    });
   });
 
   describe('validateQuoteNumber', () => {
@@ -177,8 +202,18 @@ describe('Quote Creation Business Rules', () => {
         'q-2024-001'    // Lowercase prefix
       ];
       invalidQuoteNumbers.forEach(number => {
-        expect(validateQuoteNumber(number)).toBe(false);
+        expect(() => validateQuoteNumber(number))
+          .toThrow('Invalid quote number format');
       });
+    });
+
+    test('should throw error for missing or invalid quote number', () => {
+      expect(() => validateQuoteNumber())
+        .toThrow('Quote number is required');
+      expect(() => validateQuoteNumber(null))
+        .toThrow('Quote number is required');
+      expect(() => validateQuoteNumber(123))
+        .toThrow('Quote number must be a string');
     });
 
     test('should validate quote number uniqueness', () => {

@@ -33,13 +33,17 @@ export function validateQuoteCreation(deal) {
  * @throws {Error} - If product data is invalid
  */
 export function mapProductsToLineItems(products) {
+  if (!products) {
+    throw new Error('Products array is required');
+  }
+  
   if (!Array.isArray(products)) {
     throw new Error('Products must be an array');
   }
 
   return products.map(product => {
     // Validate required fields
-    if (!product.name || product.quantity === undefined || product.item_price === undefined) {
+    if (!product || !product.name || product.quantity === undefined || product.item_price === undefined) {
       throw new Error('Invalid product data');
     }
     // Support special_price override
@@ -76,15 +80,23 @@ export function mapProductsToLineItems(products) {
  * @throws {Error} - If quote number is invalid or duplicate
  */
 export function validateQuoteNumber(quoteNumber, existingQuoteNumbers = []) {
+  if (!quoteNumber) {
+    throw new Error('Quote number is required');
+  }
+
+  if (typeof quoteNumber !== 'string') {
+    throw new Error('Quote number must be a string');
+  }
+
   // Validate format: Q-YYYY-NNN
   const quoteNumberRegex = /^Q-\d{4}-\d{3}$/;
   
   if (!quoteNumberRegex.test(quoteNumber)) {
-    return false;
+    throw new Error('Invalid quote number format');
   }
 
   // Check for duplicates if existing numbers provided
-  if (existingQuoteNumbers.includes(quoteNumber)) {
+  if (existingQuoteNumbers && existingQuoteNumbers.includes(quoteNumber)) {
     throw new Error('Quote number already exists');
   }
 
