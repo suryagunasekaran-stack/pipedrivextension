@@ -1,17 +1,25 @@
 /**
- * MongoDB Schema Definitions and Validation Rules
+ * @fileoverview MongoDB Schema Definitions and Collection Management
  * 
- * This module defines MongoDB collection schemas with validation rules,
- * indexes, and TypeScript-style interfaces for the project management system.
- * These schemas enforce data integrity and provide clear documentation
- * for database collections.
+ * Comprehensive schema definitions for all MongoDB collections used in the application.
+ * Provides validation rules, indexes, and collection management utilities that ensure
+ * data integrity and optimal query performance.
  * 
- * Collections defined:
- * - project_sequences: Sequential numbering for each department/year
- * - deal_project_mappings: Maps Pipedrive deals to generated project numbers
+ * Key features:
+ * - JSON Schema validation for all collections
+ * - Automatic index creation and management
+ * - Collection lifecycle management
+ * - Production-ready schema definitions
+ * 
+ * Collections managed:
+ * - project_sequences: Project numbering and sequencing
+ * - deal_project_mappings: Deal-to-project relationships
+ * - auth_tokens: Encrypted authentication tokens
  * 
  * @module models/mongoSchemas
  */
+
+import logger from '../lib/logger.js';
 
 /**
  * @typedef {Object} ProjectSequence
@@ -282,7 +290,7 @@ export async function ensureCollection(db, collectionName) {
       };
       
       await db.createCollection(collectionName, createOptions);
-      console.log(`Created collection '${collectionName}' with schema validation`);
+      logger.info(`Created collection '${collectionName}' with schema validation`);
     } else {
       // Update validation rules for existing collection
       try {
@@ -290,9 +298,9 @@ export async function ensureCollection(db, collectionName) {
           collMod: collectionName,
           validator: config.schema.validator
         });
-        console.log(`Updated schema validation for collection '${collectionName}'`);
+        logger.info(`Updated schema validation for collection '${collectionName}'`);
       } catch (modError) {
-        console.warn(`Could not update validation for '${collectionName}':`, modError.message);
+        logger.warn(`Could not update validation for '${collectionName}'`, { error: modError.message });
       }
     }
 
@@ -302,14 +310,14 @@ export async function ensureCollection(db, collectionName) {
       for (const indexDef of config.schema.indexes) {
         try {
           await collection.createIndex(indexDef.key, indexDef.options);
-          console.log(`Created index '${indexDef.options.name}' for collection '${collectionName}'`);
+          logger.debug(`Created index '${indexDef.options.name}' for collection '${collectionName}'`);
         } catch (indexError) {
           if (indexError.codeName === 'IndexOptionsConflict' || 
               indexError.codeName === 'IndexKeySpecsConflict' ||
               indexError.message.includes('already exists')) {
-            console.log(`Index '${indexDef.options.name}' already exists for '${collectionName}'`);
+            logger.debug(`Index '${indexDef.options.name}' already exists for '${collectionName}'`);
           } else {
-            console.error(`Failed to create index '${indexDef.options.name}' for '${collectionName}':`, indexError.message);
+            logger.error(`Failed to create index '${indexDef.options.name}' for '${collectionName}'`, { error: indexError.message });
             // Don't throw here, continue with other indexes
           }
         }
@@ -318,7 +326,7 @@ export async function ensureCollection(db, collectionName) {
 
     return collection;
   } catch (error) {
-    console.error(`Error ensuring collection ${collectionName}:`, error.message);
+    logger.error(`Error ensuring collection ${collectionName}`, { error: error.message });
     throw error;
   }
 }

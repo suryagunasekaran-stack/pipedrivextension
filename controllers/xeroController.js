@@ -377,13 +377,13 @@ export const acceptXeroQuote = async (req, res) => {
         const xeroAccessToken = req.xeroAuth.accessToken;
         const xeroTenantId = req.xeroAuth.tenantId;
 
-        logger.info('Attempting to accept Xero quote', {
+        logger.info('Attempting to accept Xero quote using simplified workflow', {
             quoteId,
             companyId: pipedriveCompanyId,
             tenantId: xeroTenantId
         });
 
-        const acceptanceResult = await xeroApiService.updateQuoteStatus(xeroAccessToken, xeroTenantId, quoteId, 'ACCEPTED');
+        const acceptanceResult = await xeroApiService.acceptXeroQuote(xeroAccessToken, xeroTenantId, quoteId);
 
         if (acceptanceResult) {
             logger.info('Quote acceptance successful', {
@@ -482,7 +482,10 @@ export const createXeroProject = async (req, res) => {
                 });
             }
         } catch (error) {
-            console.error('Error checking for duplicate projects:', error);
+            logger.warn('Error checking for duplicate projects', { 
+                error: error.message,
+                vesselName 
+            });
             // Continue with project creation even if duplicate check fails
         }
 
@@ -493,9 +496,18 @@ export const createXeroProject = async (req, res) => {
             deadline: deadline,
         };
 
-        console.log('Creating Xero project with data:', projectData);
+        logger.info('Creating Xero project', { 
+            projectName: formattedProjectName,
+            contactId,
+            estimateAmount 
+        });
+        
         const newProject = await xeroApiService.createXeroProject(xeroAccessToken, xeroTenantId, projectData, quoteId, dealId, pipedriveCompanyId);
-        console.log('Xero project created:', newProject);
+        
+        logger.info('Xero project created successfully', { 
+            projectId: newProject.ProjectID || newProject.projectId,
+            projectName: formattedProjectName 
+        });
 
         // Create default tasks if project was created successfully
         if (newProject && (newProject.ProjectID || newProject.projectId)) {
@@ -504,33 +516,39 @@ export const createXeroProject = async (req, res) => {
                 "manhours",
                 "overtime",
                 "transport",
-                "supply labour"
+                "supplylabour"
             ];
 
             const createdTasks = [];
             for (const taskName of defaultTasks) {
                 try {
-                    console.log(`Creating task "${taskName}" for project ${projectId}`);
+                    logger.debug(`Creating task "${taskName}" for project ${projectId}`);
                     const task = await xeroApiService.createXeroTask(
                         xeroAccessToken,
                         xeroTenantId,
                         projectId,
                         taskName
                     );
-                    console.log(`Task "${taskName}" created:`, task);
                     if (task) {
+                        logger.debug(`Task "${taskName}" created successfully`, {
+                            taskId: task.TaskID || task.taskId || task.id
+                        });
                         createdTasks.push(task);
                     }
                 } catch (taskError) {
-                    console.error(`Failed to create task "${taskName}":`, taskError);
-                    if (taskError.response) {
-                        console.error('Task creation error response:', taskError.response.data);
-                    }
+                    logger.error(`Failed to create task "${taskName}" for project ${projectId}. Reason: ${taskError.message || 'Unknown error'}`, {
+                        taskName,
+                        projectId,
+                        error: taskError,
+                        errorStack: taskError.stack
+                    });
                 }
             }
             newProject.tasks = createdTasks;
         } else {
-            console.error('Project creation response missing ProjectID:', newProject);
+            logger.error('Project creation response missing ProjectID', { 
+                newProject: newProject ? Object.keys(newProject) : 'null' 
+            });
             return res.status(500).json({ 
                 error: 'Failed to create project in Xero - invalid project response',
                 details: newProject || 'No project data received'
@@ -562,15 +580,18 @@ export const createXeroProject = async (req, res) => {
                 
                 if (pdApiDomain && pdAccessToken) {
                     const projectIdentifier = newProject.projectId || newProject.id || newProject.projectNumber || `Project: ${formattedProjectName}`;
-                    console.log('Updating Pipedrive deal with project identifier:', projectIdentifier);
+                    logger.debug('Updating Pipedrive deal with project identifier', { 
+                        projectIdentifier,
+                        dealId 
+                    });
                     
                     await pipedriveApiService.updateDealWithProjectNumber(pdApiDomain, pdAccessToken, dealId, projectIdentifier);
                 }
             } catch (updateError) {
-                console.error('Failed to update Pipedrive deal with project info:', updateError);
-                if (updateError.response) {
-                    console.error('Pipedrive update error response:', updateError.response.data);
-                }
+                logger.error('Failed to update Pipedrive deal with project info', {
+                    dealId,
+                    error: updateError.message
+                });
             }
         }
 
@@ -587,9 +608,9 @@ export const createXeroProject = async (req, res) => {
         }
 
     } catch (error) {
-        console.error('Error creating Xero project:', error);
+        logger.error('Error creating Xero project', { error: error.message });
         if (error.response) {
-            console.error('Xero API error response:', error.response.data);
+            logger.error('Xero API error response', { response: error.response.data });
             return res.status(error.response.status || 500).json({ 
                 error: 'Failed to create Xero project',
                 details: error.response.data || error.message

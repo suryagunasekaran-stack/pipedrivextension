@@ -16,6 +16,7 @@
  */
 
 import { MongoClient } from 'mongodb';
+import logger from '../lib/logger.js';
 
 let client = null;
 
@@ -50,9 +51,9 @@ async function validateDatabaseConnection(db) {
   try {
     // Ping the database to ensure connection is working
     await db.admin().ping();
-    console.log('Database connection validated successfully');
+    logger.debug('Database connection validated successfully');
   } catch (error) {
-    console.error('Database connection validation failed:', error);
+    logger.error('Database connection validation failed', { error: error.message });
     throw new Error('Database connection is not working properly');
   }
 }
@@ -82,7 +83,7 @@ export async function withDatabase(operation) {
     const result = await operation(db, currentClient);
     return result;
   } catch (error) {
-    console.error('Database operation failed:', error);
+    logger.error('Database operation failed', { error: error.message });
     throw error;
   } finally {
     // Always close the connection
@@ -97,7 +98,7 @@ export async function withDatabase(operation) {
  * @deprecated Use withDatabase() instead for better connection management
  */
 export async function connectToDatabase() {
-  console.warn('connectToDatabase() is deprecated. Use withDatabase() for better connection management.');
+  logger.warn('connectToDatabase() is deprecated. Use withDatabase() for better connection management.');
   if (!client) {
     client = await createClient();
   }

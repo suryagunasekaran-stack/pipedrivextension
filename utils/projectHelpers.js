@@ -322,7 +322,7 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
         
         const projectData = {
             contactId: xeroContactId,
-            name: `IPC - ${vesselName}`,
+            name: `${projectNumber} - ${vesselName}`,
             estimateAmount: dealDetails.value || null,
             deadline: dealDetails.expected_close_date || null
         };
@@ -361,7 +361,7 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
             "manhours",
             "overtime", 
             "transport",
-            "supply labour"
+            "supplylabour"
         ];
 
         logger.info('Starting task creation for project', {
@@ -392,10 +392,12 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
                     logger.warn(`No task data returned for "${taskName}"`, { projectId });
                 }
             } catch (taskError) {
-                logger.error(`Failed to create task "${taskName}"`, {
+                logger.error(`Failed to create task "${taskName}" for project ${projectId}`, {
                     projectId,
                     taskName,
-                    error: taskError.message
+                    error: taskError,
+                    errorMessage: taskError.message,
+                    errorStack: taskError.stack
                 });
             }
         }
@@ -466,47 +468,40 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
                                 quoteId: targetQuote.QuoteID
                             };
                         } else {
-                            // Update quote status to ACCEPTED
-                            const quoteUpdateData = {
-                                QuoteID: targetQuote.QuoteID,
-                                Status: 'ACCEPTED'
-                            };
-
-                            logger.info('Accepting Xero quote', {
+                            logger.info('Accepting Xero quote using simplified workflow', {
                                 quoteId: targetQuote.QuoteID,
                                 quoteNumber: xeroQuoteNumber,
                                 currentStatus: targetQuote.Status
                             });
 
                             try {
-                                const updatedQuote = await xeroApiService.updateQuoteStatus(
+                                const acceptedQuote = await xeroApiService.acceptXeroQuote(
                                     xeroAccessToken,
                                     xeroTenantId,
-                                    targetQuote.QuoteID,
-                                    'ACCEPTED'
+                                    targetQuote.QuoteID
                                 );
 
                                 logger.info('Xero quote accepted successfully', {
                                     quoteId: targetQuote.QuoteID,
                                     quoteNumber: xeroQuoteNumber,
-                                    newStatus: updatedQuote?.Status || 'ACCEPTED'
+                                    newStatus: acceptedQuote.Status
                                 });
 
                                 quoteAcceptanceResult = {
                                     accepted: true,
                                     quoteId: targetQuote.QuoteID,
                                     previousStatus: targetQuote.Status,
-                                    newStatus: updatedQuote?.Status || 'ACCEPTED'
+                                    newStatus: acceptedQuote.Status
                                 };
-                            } catch (updateError) {
-                                logger.error('Failed to update quote status', {
+                            } catch (acceptError) {
+                                logger.error('Failed to accept quote', {
                                     quoteId: targetQuote.QuoteID,
                                     quoteNumber: xeroQuoteNumber,
-                                    error: updateError.message
+                                    error: acceptError.message
                                 });
                                 quoteAcceptanceResult = {
                                     accepted: false,
-                                    error: updateError.message
+                                    error: acceptError.message
                                 };
                             }
                         }
