@@ -21,6 +21,7 @@
  */
 
 import * as projectDao from './projectSequenceDao.js';
+import { validateProjectNumber, generateProjectNumber as generateProjectNumberFormat, parseProjectNumber } from '../utils/projectNumberUtils.js';
 
 /**
  * Mapping of Pipedrive department names to 2-letter codes
@@ -89,7 +90,8 @@ function validateAndMapDepartment(pipedriveDepartmentName) {
  * @returns {string} The formatted project number (e.g., 'NY25001')
  */
 function formatProjectNumber(departmentCode, year, sequence) {
-  return `${departmentCode}${year}${String(sequence).padStart(3, '0')}`;
+  // Use the test-driven utility for consistent formatting
+  return generateProjectNumberFormat(departmentCode, sequence);
 }
 
 /**
@@ -221,13 +223,8 @@ export function getAllDepartmentMappings() {
  * @returns {boolean} True if the format is valid
  */
 export function isValidProjectNumberFormat(projectNumber) {
-  if (!projectNumber || typeof projectNumber !== 'string') {
-    return false;
-  }
-  
-  // Format: DPTYYSSS (2 letters + 2 digits + 3 digits)
-  const projectNumberRegex = /^[A-Z]{2}[0-9]{2}[0-9]{3}$/;
-  return projectNumberRegex.test(projectNumber);
+  // Use the test-driven utility for consistent validation
+  return validateProjectNumber(projectNumber);
 }
 
 /**
@@ -236,17 +233,7 @@ export function isValidProjectNumberFormat(projectNumber) {
  * @param {string} projectNumber - The project number to parse
  * @returns {Object|null} Object with departmentCode, year, sequence or null if invalid
  */
-export function parseProjectNumber(projectNumber) {
-  if (!isValidProjectNumberFormat(projectNumber)) {
-    return null;
-  }
-  
-  return {
-    departmentCode: projectNumber.substring(0, 2),
-    year: parseInt(projectNumber.substring(2, 4), 10),
-    sequence: parseInt(projectNumber.substring(4, 7), 10)
-  };
-}
+export { parseProjectNumber };
 
 /**
  * Links an additional deal to an existing project

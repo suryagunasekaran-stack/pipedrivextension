@@ -97,7 +97,10 @@ describe('Project Helpers - Business Logic Tests', () => {
         test('should fetch and validate deal with department', async () => {
             const mockDeal = {
                 id: 'deal-1',
-                [process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT]: 'Navy'
+                value: 1000,
+                org_id: { value: 'org-123' },
+                [process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT]: 'Navy',
+                [process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME]: 'Test Vessel'
             };
             mockPipedriveApiService.getDealDetails.mockResolvedValue(mockDeal);
     
@@ -113,18 +116,42 @@ describe('Project Helpers - Business Logic Tests', () => {
         });
     
         test('should throw error when department is missing', async () => {
-            const mockDeal = { id: 'deal-1' };
+            const mockDeal = { 
+                id: 'deal-1',
+                value: 1000,
+                org_id: { value: 'org-123' },
+                [process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME]: 'Test Vessel'
+                // Missing department
+            };
             mockPipedriveApiService.getDealDetails.mockResolvedValue(mockDeal);
             await expect(projectHelpers.fetchAndValidateDeal('api', 'token', 'deal-1', mockReq))
-                .rejects.toThrow('Department is required for project number generation.');
+                .rejects.toThrow('Department is required for project creation');
         });
 
         test('should throw error when department custom field key is not defined', async () => {
             delete process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT;
-            const mockDeal = { id: 'deal-1' };
+            const mockDeal = { 
+                id: 'deal-1',
+                value: 1000,
+                org_id: { value: 'org-123' },
+                [process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME]: 'Test Vessel'
+            };
             mockPipedriveApiService.getDealDetails.mockResolvedValue(mockDeal);
             await expect(projectHelpers.fetchAndValidateDeal('api', 'token', 'deal-1', mockReq))
-                .rejects.toThrow('Department is required for project number generation.');
+                .rejects.toThrow('Department is required for project creation');
+        });
+
+        test('should throw error when deal fails business validation', async () => {
+            const mockDeal = { 
+                id: 'deal-1',
+                // Missing value
+                org_id: { value: 'org-123' },
+                [process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT]: 'Navy',
+                [process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME]: 'Test Vessel'
+            };
+            mockPipedriveApiService.getDealDetails.mockResolvedValue(mockDeal);
+            await expect(projectHelpers.fetchAndValidateDeal('api', 'token', 'deal-1', mockReq))
+                .rejects.toThrow('Deal value is required');
         });
     });
 

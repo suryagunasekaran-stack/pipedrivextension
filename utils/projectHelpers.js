@@ -21,6 +21,8 @@ import * as pipedriveApiService from '../services/pipedriveApiService.js';
 import * as xeroApiService from '../services/xeroApiService.js';
 import { getNextProjectNumber } from '../models/projectSequenceModel.js';
 import logger from '../lib/logger.js';
+import { validateProjectNumber } from './projectNumberUtils.js';
+import { validateDealForProject } from './projectBusinessRules.js';
 
 /**
  * Validates and refreshes Pipedrive authentication tokens for a company
@@ -108,6 +110,20 @@ export async function fetchAndValidateDeal(apiDomain, accessToken, dealId, req) 
         throw error;
     }
 
+    // Apply business rules validation
+    try {
+        validateDealForProject(dealDetails);
+    } catch (validationError) {
+        logger.warn('Deal failed business rules validation', { 
+            dealId, 
+            error: validationError.message 
+        });
+        const error = new Error(validationError.message);
+        error.statusCode = 400;
+        error.validationError = true;
+        throw error;
+    }
+
     const departmentKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT;
     const departmentName = departmentKey ? dealDetails[departmentKey] : null;
     
@@ -134,11 +150,36 @@ export async function fetchAndValidateDeal(apiDomain, accessToken, dealId, req) 
  */
 export async function generateProjectNumber(dealId, departmentName, existingProjectNumberToLink, req) {
     try {
+        // Validate existing project number if provided
+        if (existingProjectNumberToLink) {
+            if (!validateProjectNumber(existingProjectNumberToLink)) {
+                logger.warn('Invalid existing project number format', {
+                    dealId,
+                    providedProjectNumber: existingProjectNumberToLink
+                });
+                const error = new Error('Invalid project number format provided for linking.');
+                error.statusCode = 400;
+                throw error;
+            }
+        }
+
         const projectNumber = await getNextProjectNumber(
             dealId, 
             departmentName, 
             existingProjectNumberToLink
         );
+        
+        // Validate generated project number
+        if (!validateProjectNumber(projectNumber)) {
+            logger.error('Generated invalid project number', {
+                dealId,
+                departmentName,
+                generatedNumber: projectNumber
+            });
+            const error = new Error('Generated project number failed validation.');
+            error.statusCode = 500;
+            throw error;
+        }
         
         logger.info('Project number generated successfully', {
             dealId,
@@ -149,6 +190,11 @@ export async function generateProjectNumber(dealId, departmentName, existingProj
         
         return projectNumber;
     } catch (projectError) {
+        // Re-throw if already has status code
+        if (projectError.statusCode) {
+            throw projectError;
+        }
+        
         logger.error('Error generating project number', {
             dealId,
             departmentName,

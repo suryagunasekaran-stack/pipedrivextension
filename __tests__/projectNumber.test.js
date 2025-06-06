@@ -37,12 +37,17 @@ describe('Project Number Validation', () => {
     });
 
     test('should validate year format', () => {
-      const currentYear = new Date().getFullYear().toString().slice(-2);
-      const validYear = `${currentYear}001`;
-      const invalidYear = `${parseInt(currentYear) + 1}001`;
-
-      expect(validateProjectNumber(`NY${validYear}`)).toBe(true);
-      expect(validateProjectNumber(`NY${invalidYear}`)).toBe(false);
+      // Test that any 2-digit year is valid (removed year restriction for flexibility)
+      const validYears = ['00', '25', '99', '50'];
+      validYears.forEach(year => {
+        expect(validateProjectNumber(`NY${year}001`)).toBe(true);
+      });
+      
+      // Test invalid year formats
+      const invalidYears = ['2', '250', 'XX', ''];
+      invalidYears.forEach(year => {
+        expect(validateProjectNumber(`NY${year}001`)).toBe(false);
+      });
     });
   });
 
@@ -79,15 +84,16 @@ describe('Project Number Validation', () => {
       
       expect(parsed).toEqual({
         departmentCode: 'NY',
-        year: '25',
+        year: 25,  // Year is now returned as a number
         sequence: 1
       });
     });
 
-    test('should throw error for invalid project number', () => {
-      expect(() => parseProjectNumber('NY2501')).toThrow('Invalid project number format');
-      expect(() => parseProjectNumber('N250001')).toThrow('Invalid project number format');
-      expect(() => parseProjectNumber('NY2500A')).toThrow('Invalid project number format');
+    test('should return null for invalid project number', () => {
+      // Now returns null instead of throwing errors
+      expect(parseProjectNumber('NY2501')).toBeNull();
+      expect(parseProjectNumber('N250001')).toBeNull();
+      expect(parseProjectNumber('NY2500A')).toBeNull();
     });
 
     test('should handle sequence numbers correctly', () => {

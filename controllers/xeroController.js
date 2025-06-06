@@ -11,6 +11,8 @@ import * as pipedriveApiService from '../services/pipedriveApiService.js';
 import logger from '../lib/logger.js';
 import { v4 as uuidv4 } from 'uuid';
 import { logSuccess, logWarning, logInfo, logProcessing } from '../middleware/routeLogger.js';
+import { validateQuoteCreation, mapProductsToLineItems } from '../utils/quoteBusinessRules.js';
+import { formatLineItem, calculateLineItemTotal } from '../utils/quoteLineItemUtils.js';
 
 /**
  * Checks the Xero connection status for a specific Pipedrive company.
@@ -220,6 +222,23 @@ export const createXeroQuote = async (req, res) => {
             });
         }
 
+        // Validate quote creation eligibility
+        try {
+            // Create a temporary deal object with products for validation
+            const dealWithProducts = {
+                ...dealDetails,
+                products: await pipedriveApiService.getDealProducts(pdApiDomain, pdAccessToken, pipedriveDealId)
+            };
+            
+            validateQuoteCreation(dealWithProducts);
+        } catch (validationError) {
+            logWarning(req, 'Quote creation validation failed', {
+                error: validationError.message,
+                dealId: pipedriveDealId
+            });
+            return res.status(400).json({ error: validationError.message });
+        }
+
         // Fetch deal products
         logProcessing(req, 'Fetching deal products', { pipedriveDealId });
         const dealProducts = await pipedriveApiService.getDealProducts(pdApiDomain, pdAccessToken, pipedriveDealId);
@@ -229,26 +248,28 @@ export const createXeroQuote = async (req, res) => {
             totalProductValue: dealProducts.reduce((sum, p) => sum + ((p.item_price || 0) * (p.quantity || 1)), 0)
         });
 
-        // Build line items
-        let lineItems = dealProducts.map(p => ({
-            Description: p.name || 'N/A',
-            Quantity: p.quantity || 1,
-            UnitAmount: p.item_price || 0,
-            AccountCode: process.env.XERO_DEFAULT_ACCOUNT_CODE || "200", 
-            TaxType: process.env.XERO_DEFAULT_TAX_TYPE || "NONE"     
-        }));
-
-        if (lineItems.length === 0 && dealDetails.value && dealDetails.value > 0) {
-             lineItems.push({
-                Description: dealDetails.title || "Deal Value",
-                Quantity: 1,
-                UnitAmount: dealDetails.value,
-                AccountCode: process.env.XERO_DEFAULT_ACCOUNT_CODE || "200",
-                TaxType: process.env.XERO_DEFAULT_TAX_TYPE || "NONE"
-             });
-        } else if (lineItems.length === 0) {
-            logWarning(req, 'No line items available for quote');
-            return res.status(400).json({ error: 'Cannot create a Xero quote with no line items and no deal value.'});
+        // Build line items using test-driven utility
+        let lineItems;
+        try {
+            lineItems = mapProductsToLineItems(dealProducts);
+        } catch (mappingError) {
+            logWarning(req, 'Product to line item mapping failed', {
+                error: mappingError.message,
+                productsCount: dealProducts.length
+            });
+            
+            // Fallback: If no products but deal has value, create single line item
+            if (dealProducts.length === 0 && dealDetails.value && dealDetails.value > 0) {
+                lineItems = [{
+                    Description: dealDetails.title || "Deal Value",
+                    Quantity: 1,
+                    UnitAmount: dealDetails.value,
+                    AccountCode: process.env.XERO_DEFAULT_ACCOUNT_CODE || "200",
+                    TaxType: process.env.XERO_DEFAULT_TAX_TYPE || "NONE"
+                }];
+            } else {
+                return res.status(400).json({ error: 'Cannot create a Xero quote with no valid line items.' });
+            }
         }
 
         logProcessing(req, 'Line items prepared', {

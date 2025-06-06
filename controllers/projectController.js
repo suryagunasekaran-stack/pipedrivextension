@@ -10,6 +10,7 @@
 import 'dotenv/config';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import logger from '../lib/logger.js';
+import { validateProjectCreation, validateDealForProject } from '../utils/projectBusinessRules.js';
 import {
     validateProjectCreationRequest,
     validateAndRefreshPipedriveTokens,
@@ -48,6 +49,22 @@ export const createFullProject = asyncHandler(async (req, res) => {
 
         // Step 3: Fetch and validate deal details
         const { dealDetails, departmentName } = await fetchAndValidateDeal(apiDomain, accessToken, dealId, req);
+
+        // Step 3a: Apply business rules validation to the deal
+        try {
+            validateProjectCreation(dealDetails);
+            validateDealForProject(dealDetails);
+        } catch (validationError) {
+            logger.warn({
+                operation: 'Deal Validation Failed',
+                dealId,
+                error: validationError.message
+            }, '⚠️ Deal failed business rules validation');
+            
+            const error = new Error(validationError.message);
+            error.statusCode = 400;
+            throw error;
+        }
 
         // Step 4: Generate project number
         const projectNumber = await generateProjectNumber(dealId, departmentName, existingProjectNumberToLink, req);

@@ -8,6 +8,7 @@ import 'dotenv/config';
 import * as tokenService from '../services/secureTokenService.js';
 import * as pipedriveApiService from '../services/pipedriveApiService.js';
 import { logSuccess, logWarning, logProcessing } from '../middleware/routeLogger.js';
+import { validateDealForProject } from '../utils/projectBusinessRules.js';
 
 const pipedriveClientId = process.env.CLIENT_ID;
 const pipedriveClientSecret = process.env.CLIENT_SECRET;
@@ -163,6 +164,20 @@ export const createProject = async (req, res) => {
             hasPersonId: !!(dealDetails.person_id && dealDetails.person_id.value),
             hasOrgId: !!(dealDetails.org_id && dealDetails.org_id.value)
         });
+
+        // Validate deal for project creation using business rules
+        try {
+            validateDealForProject(dealDetails);
+        } catch (validationError) {
+            logWarning(req, 'Deal validation failed', {
+                dealId,
+                error: validationError.message
+            });
+            return res.status(400).json({ 
+                error: validationError.message,
+                validationFailure: true
+            });
+        }
 
         const xeroQuoteNumber = xeroQuoteCustomFieldKey ? (dealDetails[xeroQuoteCustomFieldKey] || null) : null;
 

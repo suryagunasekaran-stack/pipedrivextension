@@ -4,30 +4,14 @@
  * @returns {boolean} - Whether the project number is valid
  */
 export function validateProjectNumber(projectNumber) {
+  if (!projectNumber || typeof projectNumber !== 'string') {
+    return false;
+  }
+  
   // Must match pattern: 2 uppercase letters + 2 digits + 3 digits
   const projectNumberRegex = /^[A-Z]{2}\d{2}\d{3}$/;
   
-  if (!projectNumberRegex.test(projectNumber)) {
-    return false;
-  }
-
-  // Extract components
-  const departmentCode = projectNumber.slice(0, 2);
-  const year = projectNumber.slice(2, 4);
-  const sequence = projectNumber.slice(4);
-
-  // Validate year (must be current year)
-  const currentYear = new Date().getFullYear().toString().slice(-2);
-  if (year !== currentYear) {
-    return false;
-  }
-
-  // Validate sequence (must be 3 digits)
-  if (!/^\d{3}$/.test(sequence)) {
-    return false;
-  }
-
-  return true;
+  return projectNumberRegex.test(projectNumber);
 }
 
 /**
@@ -56,17 +40,16 @@ export function generateProjectNumber(departmentCode, sequence) {
 /**
  * Parses a project number into its components
  * @param {string} projectNumber - The project number to parse
- * @returns {Object} - Parsed components
- * @throws {Error} - If project number is invalid
+ * @returns {Object|null} - Parsed components or null if invalid
  */
 export function parseProjectNumber(projectNumber) {
   if (!validateProjectNumber(projectNumber)) {
-    throw new Error('Invalid project number format');
+    return null;
   }
 
   return {
     departmentCode: projectNumber.slice(0, 2),
-    year: projectNumber.slice(2, 4),
+    year: parseInt(projectNumber.slice(2, 4), 10),
     sequence: parseInt(projectNumber.slice(4), 10)
   };
 } 
