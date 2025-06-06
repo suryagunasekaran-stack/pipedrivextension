@@ -1,4 +1,4 @@
-import { validateLineItem, formatLineItem } from './quoteLineItemUtils';
+import { validateLineItem, formatLineItem } from './quoteLineItemUtils.js';
 
 /**
  * Validates if a quote can be created for a deal

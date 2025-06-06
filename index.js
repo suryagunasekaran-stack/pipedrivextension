@@ -1,7 +1,6 @@
 import 'dotenv/config'; // Changed from require('dotenv').config()
 import express, { json } from 'express';
 import cors from 'cors';
-import { loadAllTokensFromFile, loadAllXeroTokensFromFile } from './services/tokenService.js';
 import logger, { httpLogger } from './lib/logger.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { logRouteError, logRoute, logProcessing, logSuccess } from './middleware/routeLogger.js';
@@ -11,7 +10,7 @@ import authRoutes from './routes/authRoutes.js'; // Added .js
 import pipedriveRoutes from './routes/pipedriveRoutes.js'; // Added .js
 import xeroRoutes from './routes/xeroRoutes.js'; // Added .js
 import projectRoutes from './routes/projectRoutes.js'; // Added .js
-import databaseRoutes from './routes/databaseRoutes.js'; // Database administration routes
+
 
 const app = express();
 
@@ -169,9 +168,6 @@ app.use(errorHandler); // Handle all other errors
 // --- Start Server and Load Tokens ---
 async function startServer() {
     try {
-        await loadAllTokensFromFile(); // Load Pipedrive tokens
-        await loadAllXeroTokensFromFile(); // Load Xero tokens
-        
         app.listen(port, () => {
             logger.info({
                 port,

@@ -1,4 +1,4 @@
-import { validateQuoteCreation, mapProductsToLineItems, validateQuoteNumber } from '../utils/quoteBusinessRules';
+import { validateQuoteCreation, mapProductsToLineItems, validateQuoteNumber } from '../utils/quoteBusinessRules.js';
 
 describe('Quote Creation Business Rules', () => {
   describe('validateQuoteCreation', () => {

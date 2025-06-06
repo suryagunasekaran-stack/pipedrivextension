@@ -20,7 +20,7 @@
 import express from 'express';
 import * as authController from '../controllers/authController.js';
 import { checkAuthRequirements } from '../middleware/authMiddleware.js';
-import * as tokenService from '../services/tokenService.js';
+import * as tokenService from '../services/secureTokenService.js';
 
 const router = express.Router();
 
@@ -34,7 +34,7 @@ router.get('/', async (req, res) => {
         const token = await tokenService.getAuthToken(companyId, 'pipedrive');
         if (token && token.accessToken) {
             // If authenticated, redirect to success page
-            return res.redirect(`${pipedriveSuccessPageUrl}?companyId=${encodeURIComponent(companyId)}`);
+            return res.redirect(`${process.env.FRONTEND_BASE_URL || 'http://localhost:3001'}/success?companyId=${encodeURIComponent(companyId)}`);
         }
     }
     

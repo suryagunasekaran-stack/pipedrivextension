@@ -15,7 +15,7 @@
  * @module services/pipedriveApiService
  */
 
-import { getPipedriveAccessToken } from './tokenService.js';
+import { getValidAccessToken } from './secureTokenService.js';
 import axios from 'axios';
 
 /**

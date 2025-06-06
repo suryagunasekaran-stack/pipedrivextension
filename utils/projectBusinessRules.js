@@ -1,4 +1,4 @@
-import { validateProjectNumber } from './projectNumberUtils';
+import { validateProjectNumber } from './projectNumberUtils.js';
 
 /**
  * Validates if a project can be created for a deal

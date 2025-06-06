@@ -1,4 +1,4 @@
-import { validateProjectNumber, generateProjectNumber, parseProjectNumber } from '../utils/projectNumberUtils';
+import { validateProjectNumber, generateProjectNumber, parseProjectNumber } from '../utils/projectNumberUtils.js';
 
 describe('Project Number Validation', () => {
   describe('validateProjectNumber', () => {

@@ -1,4 +1,4 @@
-import { validateProjectCreation, validateProjectNumberAssignment, validateDealForProject } from '../utils/projectBusinessRules';
+import { validateProjectCreation, validateProjectNumberAssignment, validateDealForProject } from '../utils/projectBusinessRules.js';
 
 beforeAll(() => {
   process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT = 'department';

@@ -1,4 +1,4 @@
-import { validateLineItem, calculateLineItemTotal, formatLineItem } from '../utils/quoteLineItemUtils';
+import { validateLineItem, calculateLineItemTotal, formatLineItem } from '../utils/quoteLineItemUtils.js';
 
 describe('Quote Line Item Validation', () => {
   describe('validateLineItem', () => {
