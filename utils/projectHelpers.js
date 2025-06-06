@@ -315,15 +315,7 @@ export async function createOrFindXeroContact(accessToken, tenantId, dealDetails
  * @returns {Promise<Object>} Xero integration result
  */
 export async function handleXeroIntegration(companyId, dealDetails, projectNumber, dealId, pipedriveApiDomain, pipedriveAccessToken, req) {
-    // Check if Xero tokens are available (from middleware)
-    if (!req.xeroAuth || !req.xeroAuth.accessToken) {
-        logger.info('Xero integration not available for company', { companyId });
-        return {
-            projectCreated: false,
-            message: 'Xero not authenticated for this company'
-        };
-    }
-
+    // Xero auth is guaranteed by middleware
     let xeroAccessToken = req.xeroAuth.accessToken;
     const xeroTenantId = req.xeroAuth.tenantId;
     

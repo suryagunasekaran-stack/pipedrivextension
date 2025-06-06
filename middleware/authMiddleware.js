@@ -176,6 +176,114 @@ export const optionalXeroAuth = async (req, res, next) => {
 };
 
 /**
+ * Middleware to check and refresh Xero authentication for a company.
+ * This is REQUIRED - if Xero isn't connected, it returns 401 auth required response.
+ * 
+ * @param {Object} req - Express request object (expects companyId in body or query)
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next middleware function
+ * @returns {Promise<void>} Calls next() if authenticated, or returns auth required response
+ */
+export const requireXeroAuth = async (req, res, next) => {
+    // Check for companyId in multiple possible fields for compatibility
+    const companyId = req.body?.companyId || req.query?.companyId || 
+                     req.body?.pipedriveCompanyId || req.query?.pipedriveCompanyId ||
+                     req.pipedriveAuth?.companyId;
+
+    if (!companyId) {
+        return res.status(400).json({
+            success: false,
+            error: 'Company ID is required',
+            authRequired: true
+        });
+    }
+
+    try {
+        const tokenData = await tokenService.getAuthToken(companyId, 'xero');
+        
+        if (!tokenData || !tokenData.accessToken) {
+            logger.warn('Xero authentication required but not found', { companyId });
+            
+            return res.status(401).json({
+                success: false,
+                error: `Xero not authenticated for company ${companyId}. Please connect to Xero first.`,
+                authRequired: true,
+                authType: 'xero',
+                companyId: companyId,
+                authUrl: `http://localhost:3000/auth/connect-xero?pipedriveCompanyId=${companyId}`
+            });
+        }
+
+        // Check if token needs refresh
+        if (Date.now() >= tokenData.tokenExpiresAt) {
+            logger.info('Refreshing expired Xero token', { companyId });
+            
+            try {
+                const refreshedToken = await tokenService.refreshXeroToken(companyId);
+                logger.info('Successfully refreshed Xero token', { companyId });
+                
+                // Attach refreshed tokens to request
+                req.xeroAuth = {
+                    accessToken: refreshedToken.accessToken,
+                    tenantId: refreshedToken.tenantId,
+                    companyId: companyId
+                };
+            } catch (refreshError) {
+                logger.error('Failed to refresh Xero token', {
+                    companyId,
+                    error: refreshError.message
+                });
+                
+                return res.status(401).json({
+                    success: false,
+                    error: 'Xero token expired and refresh failed. Please re-authenticate.',
+                    authRequired: true,
+                    authType: 'xero',
+                    companyId: companyId,
+                    authUrl: `http://localhost:3000/auth/connect-xero?pipedriveCompanyId=${companyId}`
+                });
+            }
+        } else {
+            // Attach Xero tokens to request for use in controllers
+            req.xeroAuth = {
+                accessToken: tokenData.accessToken,
+                tenantId: tokenData.tenantId,
+                companyId: companyId
+            };
+        }
+
+        next();
+
+    } catch (error) {
+        logger.error('Error in required Xero auth middleware', {
+            companyId,
+            error: error.message
+        });
+        
+        res.status(500).json({
+            success: false,
+            error: 'Xero authentication check failed',
+            authRequired: true
+        });
+    }
+};
+
+/**
+ * Combined middleware that requires both Pipedrive and Xero authentication.
+ * This should be used for endpoints that absolutely need both integrations.
+ * 
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next middleware function
+ * @returns {Promise<void>} Calls next() if both are authenticated
+ */
+export const requireBothPipedriveAndXero = async (req, res, next) => {
+    return requirePipedriveAuth(req, res, async () => {
+        return requireXeroAuth(req, res, next);
+    });
+};
+
+/**
  * Combined middleware that requires Pipedrive auth and optionally includes Xero auth.
  * This is the most commonly used middleware for routes that need Pipedrive access.
  * 

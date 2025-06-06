@@ -420,12 +420,12 @@ describe('handleXeroIntegration', () => {
         expect(result.tasks.length).toBe(2);
     });
     
-    test('should return early if no xeroAuth on req', async () => {
-        const result = await projectHelpers.handleXeroIntegration('company-1', {}, 'PN-1', 'deal-1', 'api', 'token', {});
-        expect(result).toEqual({
-            projectCreated: false,
-            message: 'Xero not authenticated for this company'
-        });
+    test('should require xeroAuth on req (guaranteed by middleware)', async () => {
+        // This test verifies that the function expects xeroAuth to be present
+        // Since we now require both Pipedrive and Xero auth at the middleware level,
+        // the function should not handle missing xeroAuth gracefully
+        await expect(projectHelpers.handleXeroIntegration('company-1', {}, 'PN-1', 'deal-1', 'api', 'token', {}))
+            .rejects.toThrow();
     });
 
     test('should handle expired Xero token and refresh failure', async () => {

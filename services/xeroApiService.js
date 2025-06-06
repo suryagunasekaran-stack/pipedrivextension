@@ -785,3 +785,64 @@ export const getXeroProjects = async (accessToken, tenantId) => {
     throw error;
   }
 };
+
+/**
+ * Updates an existing quote in Xero
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {string} quoteId - Xero quote ID to update
+ * @param {Object} quotePayload - Quote data to update
+ * @returns {Promise<Object>} Updated quote object
+ * @throws {Error} When quote update fails or validation errors occur
+ */
+export const updateQuote = async (accessToken, tenantId, quoteId, quotePayload) => {
+  try {
+    logger.info('Updating Xero quote', {
+      quoteId,
+      lineItemsCount: quotePayload.LineItems ? quotePayload.LineItems.length : 0
+    });
+
+    const response = await axios.post(
+      `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`,
+      { Quotes: [quotePayload] },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Xero-Tenant-Id': tenantId,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+      }
+    );
+    
+    if (response.data.Quotes && response.data.Quotes.length > 0) {
+      const updatedQuote = response.data.Quotes[0];
+      logger.info('Successfully updated Xero quote', {
+        QuoteID: updatedQuote.QuoteID,
+        QuoteNumber: updatedQuote.QuoteNumber,
+        Status: updatedQuote.Status,
+        Total: updatedQuote.Total,
+        lineItemsCount: updatedQuote.LineItems ? updatedQuote.LineItems.length : 0
+      });
+      return updatedQuote;
+    } else {
+      throw new Error('No quote returned from Xero API');
+    }
+  } catch (error) {
+    logger.error('Error updating Xero quote', {
+      quoteId,
+      error: error.response ? error.response.data : error.message,
+      status: error.response?.status
+    });
+    
+    if (error.response && error.response.data && error.response.data.Elements) {
+      const validationErrors = error.response.data.Elements[0].ValidationErrors;
+      if (validationErrors && validationErrors.length > 0) {
+        throw new Error(`Quote validation failed: ${validationErrors.map(v => v.Message).join(', ')}`);
+      }
+    }
+    
+    throw error;
+  }
+};

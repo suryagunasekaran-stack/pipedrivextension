@@ -114,20 +114,7 @@ export const createXeroQuote = async (req, res) => {
             hasAccessToken: !!pdAccessToken
         });
 
-        // Check if Xero auth is available (middleware provides this info)
-        if (!req.xeroAuth || !req.xeroAuth.accessToken) {
-            const authUrl = `http://localhost:3000/auth/connect-xero?pipedriveCompanyId=${pipedriveCompanyId}`;
-            logWarning(req, 'Xero authentication required', { authUrl });
-            return res.status(401).json({ 
-                success: false,
-                error: `Xero not authenticated for Pipedrive company ${pipedriveCompanyId}. Please connect to Xero first.`,
-                authRequired: true,
-                authType: 'xero',
-                companyId: pipedriveCompanyId,
-                authUrl
-            });
-        }
-
+        // Xero auth is guaranteed by middleware
         const xeroAccessToken = req.xeroAuth.accessToken;
         const xeroTenantId = req.xeroAuth.tenantId;
 
@@ -378,23 +365,7 @@ export const acceptXeroQuote = async (req, res) => {
     }
 
     try {
-        // Use auth info provided by middleware
-        if (!req.xeroAuth || !req.xeroAuth.accessToken) {
-            logger.warn('Xero authentication missing for quote acceptance', {
-                hasAuth: !!req.xeroAuth,
-                hasAccessToken: !!(req.xeroAuth && req.xeroAuth.accessToken),
-                companyId: pipedriveCompanyId
-            });
-            return res.status(401).json({ 
-                success: false,
-                error: `Xero not authenticated for Pipedrive company ${pipedriveCompanyId}. Please connect to Xero first.`,
-                authRequired: true,
-                authType: 'xero',
-                companyId: pipedriveCompanyId,
-                authUrl: `http://localhost:3000/auth/connect-xero?pipedriveCompanyId=${pipedriveCompanyId}`
-            });
-        }
-
+        // Xero auth is guaranteed by middleware
         const xeroAccessToken = req.xeroAuth.accessToken;
         const xeroTenantId = req.xeroAuth.tenantId;
 
@@ -474,18 +445,7 @@ export const createXeroProject = async (req, res) => {
     }
 
     try {
-        // Use auth info provided by middleware
-        if (!req.xeroAuth || !req.xeroAuth.accessToken) {
-            return res.status(401).json({ 
-                success: false,
-                error: `Xero not authenticated for Pipedrive company ${pipedriveCompanyId}. Please connect to Xero first.`,
-                authRequired: true,
-                authType: 'xero',
-                companyId: pipedriveCompanyId,
-                authUrl: `http://localhost:3000/auth/connect-xero?pipedriveCompanyId=${pipedriveCompanyId}`
-            });
-        }
-        
+        // Xero auth is guaranteed by middleware
         const xeroAccessToken = req.xeroAuth.accessToken;
         const xeroTenantId = req.xeroAuth.tenantId;
 
@@ -758,5 +718,128 @@ export const debugQuoteAcceptance = async (req, res) => {
     } catch (error) {
         // Error will be handled by the error middleware with proper logging
         throw new Error(`Debug quote acceptance failed: ${error.message}`);
+    }
+};
+
+/**
+ * Updates a quotation on Xero using Pipedrive deal data
+ * 
+ * @param {Object} req - Express request object with body containing pipedriveCompanyId and dealId
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Returns JSON with update results
+ */
+export const updateQuotationOnXero = async (req, res) => {
+    const { pipedriveCompanyId, dealId } = req.body;
+
+    if (!pipedriveCompanyId || !dealId) {
+        logWarning(req, 'Missing required parameters for quotation update', {
+            hasPipedriveCompanyId: !!pipedriveCompanyId,
+            hasDealId: !!dealId
+        });
+        return res.status(400).json({ 
+            error: 'Pipedrive Company ID and Deal ID are required.',
+            example: {
+                pipedriveCompanyId: "12345",
+                dealId: "67890"
+            }
+        });
+    }
+
+    try {
+        logInfo(req, 'Starting quotation update on Xero', { pipedriveCompanyId, dealId });
+
+        // Get Pipedrive token
+        const pipedriveToken = await tokenService.getAuthToken(pipedriveCompanyId, 'pipedrive');
+        if (!pipedriveToken || !pipedriveToken.accessToken || !pipedriveToken.apiDomain) {
+            logWarning(req, 'Pipedrive not authenticated for company', { pipedriveCompanyId });
+            return res.status(401).json({ 
+                error: 'Pipedrive not authenticated for this company',
+                pipedriveCompanyId 
+            });
+        }
+
+        // Get Xero token
+        const xeroToken = await tokenService.getAuthToken(pipedriveCompanyId, 'xero');
+        if (!xeroToken || !xeroToken.accessToken || !xeroToken.tenantId) {
+            logWarning(req, 'Xero not authenticated for company', { pipedriveCompanyId });
+            return res.status(401).json({ 
+                error: 'Xero not authenticated for this company',
+                pipedriveCompanyId 
+            });
+        }
+
+        logInfo(req, 'Authentication verified for both platforms', { 
+            pipedriveApiDomain: pipedriveToken.apiDomain,
+            xeroTenantId: xeroToken.tenantId
+        });
+
+        // Import the business logic function
+        const { updateQuotationOnXero: updateQuotationBusinessLogic } = await import('../utils/updateQuotationBusinessLogic.js');
+
+        // Call the business logic function
+        const result = await updateQuotationBusinessLogic(
+            pipedriveToken.apiDomain,
+            pipedriveToken.accessToken,
+            xeroToken.accessToken,
+            xeroToken.tenantId,
+            dealId
+        );
+
+        logSuccess(req, 'Quotation update completed successfully', {
+            dealId,
+            quoteId: result.quoteId,
+            quoteNumber: result.quoteNumber,
+            updatedLineItems: result.updatedLineItems,
+            totalAmount: result.totalAmount
+        });
+
+        res.json({
+            success: true,
+            message: result.message,
+            data: {
+                dealId: dealId,
+                quoteId: result.quoteId,
+                quoteNumber: result.quoteNumber,
+                updatedLineItems: result.updatedLineItems,
+                totalAmount: result.totalAmount,
+                timestamp: new Date().toISOString()
+            }
+        });
+
+    } catch (error) {
+        logError(req, 'Error updating quotation on Xero', {
+            dealId,
+            pipedriveCompanyId,
+            error: error.message,
+            stack: error.stack
+        });
+
+        // Return appropriate error response based on error type
+        if (error.message.includes('not authenticated')) {
+            return res.status(401).json({ 
+                error: 'Authentication failed',
+                details: error.message
+            });
+        } else if (error.message.includes('not found')) {
+            return res.status(404).json({ 
+                error: 'Resource not found',
+                details: error.message
+            });
+        } else if (error.message.includes('validation') || error.message.includes('required')) {
+            return res.status(400).json({ 
+                error: 'Validation error',
+                details: error.message
+            });
+        } else if (error.message.includes('DRAFT status')) {
+            return res.status(409).json({ 
+                error: 'Quotation status conflict',
+                details: error.message
+            });
+        } else {
+            return res.status(500).json({ 
+                error: 'Internal server error',
+                details: error.message
+            });
+        }
     }
 };
