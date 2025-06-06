@@ -62,4 +62,18 @@ router.put('/api/xero/update-quotation',
     xeroController.updateQuotationOnXero
 );
 
+// API to create invoice from quote (requires both Pipedrive and Xero auth)
+router.post('/api/xero/create-invoice-from-quote', 
+    logRoute('Create Invoice from Quote'), 
+    requireBothPipedriveAndXero, 
+    xeroController.createInvoiceFromQuote
+);
+
+// API to create partial invoice from quote (requires both Pipedrive and Xero auth)
+router.post('/api/xero/create-partial-invoice-from-quote', 
+    logRoute('Create Partial Invoice from Quote'), 
+    requireBothPipedriveAndXero, 
+    xeroController.createPartialInvoiceFromQuote
+);
+
 export default router;

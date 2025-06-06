@@ -846,3 +846,183 @@ export const updateQuote = async (accessToken, tenantId, quoteId, quotePayload) 
     throw error;
   }
 };
+
+/**
+ * Creates an invoice from an existing quote in Xero
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {string} quoteId - Xero quote ID to convert to invoice
+ * @returns {Promise<Object>} Created invoice object
+ * @throws {Error} When invoice creation fails or validation errors occur
+ */
+export const createInvoiceFromQuote = async (accessToken, tenantId, quoteId) => {
+  try {
+    logger.info('Creating invoice from Xero quote', {
+      quoteId,
+      tenantId
+    });
+
+    // First, get the quote details to extract the necessary information
+    const quoteResponse = await axios.get(
+      `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Xero-Tenant-Id': tenantId,
+          Accept: 'application/json',
+        },
+      }
+    );
+
+    if (!quoteResponse.data.Quotes || quoteResponse.data.Quotes.length === 0) {
+      throw new Error('Quote not found or inaccessible');
+    }
+
+    const quote = quoteResponse.data.Quotes[0];
+    
+    logger.debug('Retrieved quote details for invoice creation', {
+      QuoteID: quote.QuoteID,
+      QuoteNumber: quote.QuoteNumber,
+      Status: quote.Status,
+      ContactID: quote.Contact?.ContactID,
+      LineItemsCount: quote.LineItems?.length || 0
+    });
+
+    // Create invoice payload based on the quote
+    const invoicePayload = {
+      Type: 'ACCREC', // Accounts Receivable (Sales Invoice)
+      Contact: {
+        ContactID: quote.Contact.ContactID
+      },
+      Date: new Date().toISOString().split('T')[0], // Today's date
+      DueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 30 days from today
+      LineItems: quote.LineItems.map(item => ({
+        Description: item.Description,
+        Quantity: item.Quantity,
+        UnitAmount: item.UnitAmount,
+        AccountCode: item.AccountCode || '200', // Default sales account
+        TaxType: item.TaxType || 'NONE',
+        ...(item.Tracking && { Tracking: item.Tracking })
+      })),
+      Status: 'DRAFT',
+      Reference: `Quote: ${quote.QuoteNumber}`, // Reference to the original quote
+      ...(quote.CurrencyCode && { CurrencyCode: quote.CurrencyCode })
+    };
+
+    logger.debug('Prepared invoice payload', {
+      Type: invoicePayload.Type,
+      ContactID: invoicePayload.Contact.ContactID,
+      LineItemsCount: invoicePayload.LineItems.length,
+      Status: invoicePayload.Status,
+      Reference: invoicePayload.Reference
+    });
+
+    // Create the invoice
+    const response = await axios.put(
+      'https://api.xero.com/api.xro/2.0/Invoices',
+      { Invoices: [invoicePayload] },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Xero-Tenant-Id': tenantId,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+      }
+    );
+
+    if (response.data.Invoices && response.data.Invoices.length > 0) {
+      const createdInvoice = response.data.Invoices[0];
+      
+      logger.info('Successfully created invoice from quote', {
+        InvoiceID: createdInvoice.InvoiceID,
+        InvoiceNumber: createdInvoice.InvoiceNumber,
+        Status: createdInvoice.Status,
+        Total: createdInvoice.Total,
+        OriginalQuoteID: quoteId,
+        OriginalQuoteNumber: quote.QuoteNumber
+      });
+      
+      return createdInvoice;
+    } else {
+      throw new Error('No invoice returned from Xero API');
+    }
+  } catch (error) {
+    logger.error('Error creating invoice from quote', {
+      quoteId,
+      error: error.response ? error.response.data : error.message,
+      status: error.response?.status
+    });
+    
+    if (error.response && error.response.data && error.response.data.Elements) {
+      const validationErrors = error.response.data.Elements[0].ValidationErrors;
+      if (validationErrors && validationErrors.length > 0) {
+        throw new Error(`Invoice creation validation failed: ${validationErrors.map(v => v.Message).join(', ')}`);
+      }
+    }
+    
+    throw error;
+  }
+};
+
+/**
+ * Creates a new invoice in Xero
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {Object} invoicePayload - Invoice data to create
+ * @returns {Promise<Object>} Created invoice object
+ * @throws {Error} When invoice creation fails or validation errors occur
+ */
+export const createInvoice = async (accessToken, tenantId, invoicePayload) => {
+  try {
+    logger.info('Creating Xero invoice', {
+      contactId: invoicePayload.Contact?.ContactID,
+      lineItemsCount: invoicePayload.LineItems?.length || 0
+    });
+
+    const response = await axios.put(
+      'https://api.xero.com/api.xro/2.0/Invoices',
+      { Invoices: [invoicePayload] },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Xero-Tenant-Id': tenantId,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+      }
+    );
+
+    if (response.data.Invoices && response.data.Invoices.length > 0) {
+      const createdInvoice = response.data.Invoices[0];
+      
+      logger.info('Successfully created Xero invoice', {
+        InvoiceID: createdInvoice.InvoiceID,
+        InvoiceNumber: createdInvoice.InvoiceNumber,
+        Status: createdInvoice.Status,
+        Total: createdInvoice.Total,
+        lineItemsCount: createdInvoice.LineItems?.length || 0
+      });
+      
+      return createdInvoice;
+    } else {
+      throw new Error('No invoice returned from Xero API');
+    }
+  } catch (error) {
+    logger.error('Error creating Xero invoice', {
+      error: error.response ? error.response.data : error.message,
+      status: error.response?.status
+    });
+    
+    if (error.response && error.response.data && error.response.data.Elements) {
+      const validationErrors = error.response.data.Elements[0].ValidationErrors;
+      if (validationErrors && validationErrors.length > 0) {
+        throw new Error(`Invoice creation validation failed: ${validationErrors.map(v => v.Message).join(', ')}`);
+      }
+    }
+    
+    throw error;
+  }
+};

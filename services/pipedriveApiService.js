@@ -219,3 +219,45 @@ export const updateDealWithProjectNumber = async (apiDomain, accessToken, dealId
     throw error;
   }
 };
+
+/**
+ * Updates a specific custom field in a deal
+ * 
+ * @param {string} apiDomain - The Pipedrive API domain
+ * @param {string} accessToken - Valid Pipedrive access token
+ * @param {string|number} dealId - The ID of the deal to update
+ * @param {string} customFieldKey - The custom field key to update
+ * @param {string} value - The value to store in the custom field
+ * @returns {Promise<Object>} Updated deal data from Pipedrive
+ * @throws {Error} When credentials are missing, custom field key is not provided, or update fails
+ */
+export const updateDealCustomField = async (apiDomain, accessToken, dealId, customFieldKey, value) => {
+  if (!accessToken) {
+    throw new Error('Pipedrive access token not provided.');
+  }
+  if (!apiDomain) {
+    throw new Error('Pipedrive API domain not provided.');
+  }
+  if (!customFieldKey) {
+    throw new Error('Custom field key is required for deal update.');
+  }
+
+  try {
+    const response = await axios.put(
+      `${apiDomain}/v1/deals/${dealId}`,
+      { [customFieldKey]: value },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error(
+      'Error updating Pipedrive deal custom field:',
+      error.response ? JSON.stringify(error.response.data, null, 2) : error.message
+    );
+    throw error;
+  }
+};

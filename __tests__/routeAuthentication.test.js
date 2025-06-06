@@ -26,7 +26,8 @@ const mockXeroController = {
     acceptXeroQuote: jest.fn((req, res) => res.json({ success: true, message: 'Quote accepted' })),
     createXeroProject: jest.fn((req, res) => res.json({ success: true, message: 'Project created' })),
     updateQuotationOnXero: jest.fn((req, res) => res.json({ success: true, message: 'Quotation updated' })),
-    debugQuoteAcceptance: jest.fn((req, res) => res.json({ success: true, message: 'Debug response' }))
+    debugQuoteAcceptance: jest.fn((req, res) => res.json({ success: true, message: 'Debug response' })),
+    createInvoiceFromQuote: jest.fn((req, res) => res.json({ success: true, message: 'Invoice created' }))
 };
 
 const mockRouteLogger = {

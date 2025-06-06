@@ -13,6 +13,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { logSuccess, logWarning, logInfo, logProcessing } from '../middleware/routeLogger.js';
 import { validateQuoteCreation, mapProductsToLineItems } from '../utils/quoteBusinessRules.js';
 import { formatLineItem, calculateLineItemTotal } from '../utils/quoteLineItemUtils.js';
+import { validateSelectedLineItems } from '../utils/partialInvoiceBusinessRules.js';
 
 /**
  * Checks the Xero connection status for a specific Pipedrive company.
@@ -841,5 +842,426 @@ export const updateQuotationOnXero = async (req, res) => {
                 details: error.message
             });
         }
+    }
+};
+
+/**
+ * Creates an invoice from a quote using the deal ID to find the quote number
+ * 
+ * @param {Object} req - Express request object with body containing dealId and pipedriveCompanyId
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Returns JSON with created invoice details or error response
+ * @throws {Error} Returns 400 for missing params, 404 for deal/quote not found, 500 for API errors
+ */
+export const createInvoiceFromQuote = async (req, res) => {
+    const { dealId, pipedriveCompanyId } = req.body;
+
+    logProcessing(req, 'Validating input parameters for invoice creation', { 
+        dealId: !!dealId, 
+        pipedriveCompanyId: !!pipedriveCompanyId 
+    });
+
+    if (!dealId || !pipedriveCompanyId) {
+        logWarning(req, 'Missing required parameters for invoice creation');
+        return res.status(400).json({ 
+            error: 'Deal ID and Pipedrive Company ID are required.' 
+        });
+    }
+
+    try {
+        // Use auth info provided by middleware
+        const pdApiDomain = req.pipedriveAuth.apiDomain;
+        const pdAccessToken = req.pipedriveAuth.accessToken;
+
+        logProcessing(req, 'Pipedrive authentication retrieved', {
+            hasApiDomain: !!pdApiDomain,
+            hasAccessToken: !!pdAccessToken
+        });
+
+        // Xero auth is guaranteed by middleware
+        const xeroAccessToken = req.xeroAuth.accessToken;
+        const xeroTenantId = req.xeroAuth.tenantId;
+
+        logProcessing(req, 'Xero authentication verified', {
+            hasAccessToken: !!xeroAccessToken,
+            hasTenantId: !!xeroTenantId
+        });
+
+        // Fetch deal details to get quote number
+        logProcessing(req, 'Fetching Pipedrive deal details', { dealId });
+        const dealDetails = await pipedriveApiService.getDealDetails(pdApiDomain, pdAccessToken, dealId);
+        
+        if (!dealDetails) {
+            logWarning(req, 'Deal not found', { dealId });
+            return res.status(404).json({ 
+                error: `Deal with ID ${dealId} not found.` 
+            });
+        }
+
+        const quoteCustomFieldKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY;
+        const invoiceCustomFieldKey = process.env.PIPEDRIVE_INVOICE_CUSTOM_FIELD_KEY;
+        
+        const quoteNumber = quoteCustomFieldKey ? dealDetails[quoteCustomFieldKey] : null;
+        const existingInvoiceNumber = invoiceCustomFieldKey ? dealDetails[invoiceCustomFieldKey] : null;
+
+        logProcessing(req, 'Deal details retrieved', {
+            dealTitle: dealDetails.title,
+            quoteNumber: quoteNumber,
+            existingInvoiceNumber: existingInvoiceNumber,
+            hasQuoteCustomField: !!quoteCustomFieldKey,
+            hasInvoiceCustomField: !!invoiceCustomFieldKey
+        });
+
+        // Check if deal has a quote number
+        if (!quoteNumber) {
+            logWarning(req, 'Deal has no quote number', { dealId });
+            return res.status(400).json({ 
+                error: 'Deal does not have an associated quote number. Please create a quote first.' 
+            });
+        }
+
+        // Check if deal already has an invoice
+        if (existingInvoiceNumber) {
+            logWarning(req, 'Deal already has an invoice', { dealId, existingInvoiceNumber });
+            return res.status(400).json({ 
+                error: `Deal already has an associated invoice: ${existingInvoiceNumber}` 
+            });
+        }
+
+        // Find the quote in Xero
+        logProcessing(req, 'Looking for quote in Xero', { quoteNumber });
+        const xeroQuote = await xeroApiService.findXeroQuoteByNumber(xeroAccessToken, xeroTenantId, quoteNumber);
+        
+        if (!xeroQuote) {
+            logWarning(req, 'Quote not found in Xero', { quoteNumber });
+            return res.status(404).json({ 
+                error: `Quote ${quoteNumber} not found in Xero.` 
+            });
+        }
+
+        logProcessing(req, 'Quote found in Xero', {
+            quoteId: xeroQuote.QuoteID,
+            quoteNumber: xeroQuote.QuoteNumber,
+            quoteStatus: xeroQuote.Status
+        });
+
+        // Check if quote is accepted (required before creating invoice)
+        if (xeroQuote.Status !== 'ACCEPTED') {
+            logWarning(req, 'Quote not accepted', { quoteNumber, status: xeroQuote.Status });
+            return res.status(400).json({ 
+                error: `Quote ${quoteNumber} must be accepted before creating an invoice. Current status: ${xeroQuote.Status}` 
+            });
+        }
+
+        // Create invoice from quote
+        logProcessing(req, 'Creating invoice from quote', { quoteId: xeroQuote.QuoteID });
+        const createdInvoice = await xeroApiService.createInvoiceFromQuote(xeroAccessToken, xeroTenantId, xeroQuote.QuoteID);
+
+        logProcessing(req, 'Invoice created successfully', {
+            invoiceId: createdInvoice.InvoiceID,
+            invoiceNumber: createdInvoice.InvoiceNumber,
+            invoiceStatus: createdInvoice.Status
+        });
+
+        // Update Pipedrive deal with invoice number if custom field is configured
+        let updateWarning = null;
+        if (invoiceCustomFieldKey) {
+            try {
+                logProcessing(req, 'Updating Pipedrive deal with invoice number', { 
+                    dealId, 
+                    invoiceNumber: createdInvoice.InvoiceNumber 
+                });
+                
+                await pipedriveApiService.updateDealCustomField(
+                    pdApiDomain, 
+                    pdAccessToken, 
+                    dealId, 
+                    invoiceCustomFieldKey, 
+                    createdInvoice.InvoiceNumber
+                );
+
+                logSuccess(req, 'Pipedrive deal updated with invoice number', {
+                    dealId,
+                    invoiceNumber: createdInvoice.InvoiceNumber
+                });
+            } catch (updateError) {
+                logWarning(req, 'Failed to update Pipedrive deal', {
+                    dealId,
+                    error: updateError.message
+                });
+                updateWarning = updateError.message;
+            }
+        } else {
+            logWarning(req, 'PIPEDRIVE_INVOICE_CUSTOM_FIELD_KEY not configured - skipping deal update');
+            updateWarning = 'Invoice custom field key not configured in environment';
+        }
+
+        // Prepare response
+        const response = {
+            success: true,
+            invoice: createdInvoice,
+            quoteNumber: quoteNumber,
+            invoiceNumber: createdInvoice.InvoiceNumber,
+            message: `Invoice created successfully from quote ${quoteNumber}`
+        };
+
+        if (updateWarning) {
+            response.warning = `Invoice created but failed to update Pipedrive deal: ${updateWarning}`;
+        }
+
+        logSuccess(req, 'Invoice creation completed', {
+            dealId,
+            quoteNumber,
+            invoiceNumber: createdInvoice.InvoiceNumber,
+            hasWarning: !!updateWarning
+        });
+
+        res.json(response);
+
+    } catch (error) {
+        logWarning(req, 'Error creating invoice from quote', {
+            dealId,
+            error: error.message,
+            stack: error.stack
+        });
+
+        return res.status(500).json({ 
+            error: `Failed to create invoice from quote: ${error.message}` 
+        });
+    }
+};
+
+/**
+ * Creates a partial invoice from a quote using selected line items
+ * 
+ * @param {Object} req - Express request object with body containing dealId, pipedriveCompanyId, and selectedLineItems
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Returns JSON with created invoice details or error response
+ * @throws {Error} Returns 400 for missing params, 404 for deal/quote not found, 500 for API errors
+ */
+export const createPartialInvoiceFromQuote = async (req, res) => {
+    const { dealId, pipedriveCompanyId, selectedLineItems } = req.body;
+
+    logProcessing(req, 'Validating input parameters for partial invoice creation', { 
+        dealId: !!dealId, 
+        pipedriveCompanyId: !!pipedriveCompanyId,
+        selectedLineItems: !!selectedLineItems
+    });
+
+    if (!dealId || !pipedriveCompanyId || !selectedLineItems) {
+        logWarning(req, 'Missing required parameters for partial invoice creation');
+        return res.status(400).json({ 
+            error: 'Deal ID, Pipedrive Company ID, and selected line items are required.' 
+        });
+    }
+
+    // Additional validation for selectedLineItems
+    if (!Array.isArray(selectedLineItems) || selectedLineItems.length === 0) {
+        logWarning(req, 'Invalid selected line items for partial invoice creation');
+        return res.status(400).json({ 
+            error: 'At least one line item must be selected for partial invoicing.' 
+        });
+    }
+
+    try {
+        // Use auth info provided by middleware
+        const pdApiDomain = req.pipedriveAuth.apiDomain;
+        const pdAccessToken = req.pipedriveAuth.accessToken;
+
+        logProcessing(req, 'Pipedrive authentication retrieved', {
+            hasApiDomain: !!pdApiDomain,
+            hasAccessToken: !!pdAccessToken
+        });
+
+        // Xero auth is guaranteed by middleware
+        const xeroAccessToken = req.xeroAuth.accessToken;
+        const xeroTenantId = req.xeroAuth.tenantId;
+
+        logProcessing(req, 'Xero authentication verified', {
+            hasAccessToken: !!xeroAccessToken,
+            hasTenantId: !!xeroTenantId
+        });
+
+        // Fetch deal details to get quote number
+        logProcessing(req, 'Fetching Pipedrive deal details', { dealId });
+        const dealDetails = await pipedriveApiService.getDealDetails(pdApiDomain, pdAccessToken, dealId);
+        
+        if (!dealDetails) {
+            logWarning(req, 'Deal not found', { dealId });
+            return res.status(404).json({ 
+                error: `Deal with ID ${dealId} not found.` 
+            });
+        }
+
+        const quoteCustomFieldKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY;
+        const invoiceCustomFieldKey = process.env.PIPEDRIVE_INVOICE_CUSTOM_FIELD_KEY;
+        
+        const quoteNumber = quoteCustomFieldKey ? dealDetails[quoteCustomFieldKey] : null;
+        const existingInvoiceNumber = invoiceCustomFieldKey ? dealDetails[invoiceCustomFieldKey] : null;
+
+        logProcessing(req, 'Deal details retrieved', {
+            dealTitle: dealDetails.title,
+            quoteNumber: quoteNumber,
+            existingInvoiceNumber: existingInvoiceNumber,
+            hasQuoteCustomField: !!quoteCustomFieldKey,
+            hasInvoiceCustomField: !!invoiceCustomFieldKey
+        });
+
+        // Check if deal has a quote number
+        if (!quoteNumber) {
+            logWarning(req, 'Deal has no quote number', { dealId });
+            return res.status(400).json({ 
+                error: 'Deal does not have an associated quote number. Please create a quote first.' 
+            });
+        }
+
+        // Check if deal already has an invoice
+        if (existingInvoiceNumber) {
+            logWarning(req, 'Deal already has an invoice', { dealId, existingInvoiceNumber });
+            return res.status(400).json({ 
+                error: `Deal already has an associated invoice: ${existingInvoiceNumber}` 
+            });
+        }
+
+        // Find the quote in Xero
+        logProcessing(req, 'Looking for quote in Xero', { quoteNumber });
+        const xeroQuote = await xeroApiService.findXeroQuoteByNumber(xeroAccessToken, xeroTenantId, quoteNumber);
+        
+        if (!xeroQuote) {
+            logWarning(req, 'Quote not found in Xero', { quoteNumber });
+            return res.status(404).json({ 
+                error: `Quote ${quoteNumber} not found in Xero.` 
+            });
+        }
+
+        logProcessing(req, 'Quote found in Xero', {
+            quoteId: xeroQuote.QuoteID,
+            quoteNumber: xeroQuote.QuoteNumber,
+            quoteStatus: xeroQuote.Status
+        });
+
+        // Check if quote is accepted (required before creating invoice)
+        if (xeroQuote.Status !== 'ACCEPTED') {
+            logWarning(req, 'Quote not accepted', { quoteNumber, status: xeroQuote.Status });
+            return res.status(400).json({ 
+                error: `Quote ${quoteNumber} must be accepted before creating an invoice. Current status: ${xeroQuote.Status}` 
+            });
+        }
+
+        // Validate selected line items
+        const validationResult = validateSelectedLineItems(selectedLineItems, xeroQuote.LineItems);
+        if (!validationResult.isValid) {
+            logWarning(req, 'Invalid selected line items', { error: validationResult.error });
+            return res.status(400).json({ error: validationResult.error });
+        }
+
+        // Create partial invoice from quote
+        logProcessing(req, 'Creating partial invoice from quote', { 
+            quoteId: xeroQuote.QuoteID,
+            selectedItemsCount: selectedLineItems.length 
+        });
+
+        // Create a new invoice payload with selected line items
+        const invoicePayload = {
+            Type: 'ACCREC',
+            Contact: {
+                ContactID: xeroQuote.Contact.ContactID
+            },
+            Date: new Date().toISOString().split('T')[0],
+            DueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            LineItems: selectedLineItems.map(selectedItem => {
+                const originalItem = xeroQuote.LineItems.find(item => item.LineItemID === selectedItem.lineItemId);
+                return {
+                    Description: originalItem.Description,
+                    Quantity: selectedItem.quantity,
+                    UnitAmount: originalItem.UnitAmount,
+                    AccountCode: originalItem.AccountCode || '200',
+                    TaxType: originalItem.TaxType || 'NONE',
+                    ...(originalItem.Tracking && { Tracking: originalItem.Tracking })
+                };
+            }),
+            Status: 'DRAFT',
+            Reference: `Partial Invoice from Quote: ${quoteNumber}`,
+            ...(xeroQuote.CurrencyCode && { CurrencyCode: xeroQuote.CurrencyCode })
+        };
+
+        // Create the invoice
+        const createdInvoice = await xeroApiService.createInvoice(xeroAccessToken, xeroTenantId, invoicePayload);
+
+        logProcessing(req, 'Partial invoice created successfully', {
+            invoiceId: createdInvoice.InvoiceID,
+            invoiceNumber: createdInvoice.InvoiceNumber,
+            invoiceStatus: createdInvoice.Status
+        });
+
+        // Update Pipedrive deal with invoice number if custom field is configured
+        let updateWarning = null;
+        if (invoiceCustomFieldKey) {
+            try {
+                logProcessing(req, 'Updating Pipedrive deal with invoice number', { 
+                    dealId, 
+                    invoiceNumber: createdInvoice.InvoiceNumber 
+                });
+                
+                await pipedriveApiService.updateDealCustomField(
+                    pdApiDomain, 
+                    pdAccessToken, 
+                    dealId, 
+                    invoiceCustomFieldKey, 
+                    createdInvoice.InvoiceNumber
+                );
+
+                logSuccess(req, 'Pipedrive deal updated with invoice number', {
+                    dealId,
+                    invoiceNumber: createdInvoice.InvoiceNumber
+                });
+            } catch (updateError) {
+                logWarning(req, 'Failed to update Pipedrive deal', {
+                    dealId,
+                    error: updateError.message
+                });
+                updateWarning = updateError.message;
+            }
+        } else {
+            logWarning(req, 'PIPEDRIVE_INVOICE_CUSTOM_FIELD_KEY not configured - skipping deal update');
+            updateWarning = 'Invoice custom field key not configured in environment';
+        }
+
+        // Prepare response
+        const response = {
+            success: true,
+            invoice: createdInvoice,
+            quoteNumber: quoteNumber,
+            invoiceNumber: createdInvoice.InvoiceNumber,
+            message: `Partial invoice created successfully from quote ${quoteNumber}`,
+            selectedLineItems: selectedLineItems.map(item => ({
+                lineItemId: item.lineItemId,
+                quantity: item.quantity
+            }))
+        };
+
+        if (updateWarning) {
+            response.warning = `Invoice created but failed to update Pipedrive deal: ${updateWarning}`;
+        }
+
+        logSuccess(req, 'Partial invoice creation completed', {
+            dealId,
+            quoteNumber,
+            invoiceNumber: createdInvoice.InvoiceNumber,
+            hasWarning: !!updateWarning
+        });
+
+        res.json(response);
+
+    } catch (error) {
+        logWarning(req, 'Error creating partial invoice from quote', {
+            dealId,
+            error: error.message,
+            stack: error.stack
+        });
+
+        return res.status(500).json({ 
+            error: `Failed to create partial invoice from quote: ${error.message}` 
+        });
     }
 };
