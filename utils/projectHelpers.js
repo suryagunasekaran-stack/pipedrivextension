@@ -249,10 +249,10 @@ export async function createOrFindXeroContact(accessToken, tenantId, dealDetails
     } catch (contactError) {
         logger.error('Error creating/finding Xero contact', {
             dealId: dealDetails.id,
-            orgId: dealDetails.org_id?.value,
             error: contactError.message
         });
-        return null;
+        // Re-throw the error to be caught by the calling function
+        throw contactError;
     }
 }
 
@@ -316,7 +316,14 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
             };
         }
 
-        // Step 2: Create Xero project
+        // Step 2: Get deal products
+        const dealProducts = await pipedriveApiService.getDealProducts(
+            pipedriveApiDomain,
+            pipedriveAccessToken,
+            dealId
+        );
+
+        // Step 3: Create Xero project
         const vesselNameKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME;
         const vesselName = vesselNameKey ? dealDetails[vesselNameKey] : 'Unknown Vessel';
         
@@ -356,12 +363,10 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
 
         const projectId = xeroProject.ProjectID || xeroProject.projectId;
 
-        // Step 3: Create default tasks
+        // Step 4: Create default tasks
         const defaultTasks = [
             "manhours",
-            "overtime", 
-            "transport",
-            "supplylabour"
+            "overtime"
         ];
 
         logger.info('Starting task creation for project', {
@@ -407,11 +412,11 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
             createdTasks: createdTasks.length
         });
 
-        // Step 4: Handle Xero quote acceptance if quote number exists
+        // Step 5: Handle Xero quote acceptance if quote number exists
         const xeroQuoteKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY;
         const xeroQuoteNumber = xeroQuoteKey ? dealDetails[xeroQuoteKey] : null;
         
-        let quoteAcceptanceResult = null;
+        let quoteAcceptanceResult = undefined;
         
         if (xeroQuoteNumber) {
             logger.info('Checking for Xero quote to accept', {
@@ -422,7 +427,7 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
             
             try {
                 // Search for the quote by quote number
-                const quotes = await xeroApiService.getXeroQuotes(
+                const quotesResponse = await xeroApiService.getXeroQuotes(
                     xeroAccessToken,
                     xeroTenantId,
                     {
@@ -433,11 +438,11 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
 
                 logger.info('Attempting to find and accept Xero quote', { quoteNumber: xeroQuoteNumber });
                 
-                if (!quotes || !Array.isArray(quotes)) {
+                if (!quotesResponse || !Array.isArray(quotesResponse.Quotes)) {
                     logger.warn('Invalid quotes response format', {
                         quoteNumber: xeroQuoteNumber,
-                        quotesType: typeof quotes,
-                        quotesValue: quotes
+                        quotesType: typeof quotesResponse,
+                        quotesValue: quotesResponse
                     });
                     quoteAcceptanceResult = {
                         accepted: false,
@@ -446,124 +451,98 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
                 } else {
                     logger.info('Quote search result', {
                         quoteNumber: xeroQuoteNumber,
-                        foundQuotes: quotes.length,
-                        quotes: quotes.map(q => ({
+                        foundQuotes: quotesResponse.Quotes.length,
+                        quotes: quotesResponse.Quotes.map(q => ({
                             QuoteID: q.QuoteID,
                             QuoteNumber: q.QuoteNumber,
                             Status: q.Status
                         }))
                     });
 
-                    const targetQuote = quotes.find(quote => quote.QuoteNumber === xeroQuoteNumber);
+                    const targetQuote = quotesResponse.Quotes.find(quote => quote.QuoteNumber === xeroQuoteNumber);
                     
-                    if (targetQuote) {
-                        if (targetQuote.Status === 'ACCEPTED') {
-                            logger.info('Quote is already accepted, skipping update', {
-                                quoteId: targetQuote.QuoteID,
-                                quoteNumber: xeroQuoteNumber
-                            });
-                            quoteAcceptanceResult = {
-                                accepted: true,
-                                alreadyAccepted: true,
-                                quoteId: targetQuote.QuoteID
-                            };
-                        } else {
-                            logger.info('Accepting Xero quote using simplified workflow', {
-                                quoteId: targetQuote.QuoteID,
-                                quoteNumber: xeroQuoteNumber,
-                                currentStatus: targetQuote.Status
-                            });
-
-                            try {
-                                const acceptedQuote = await xeroApiService.acceptXeroQuote(
-                                    xeroAccessToken,
-                                    xeroTenantId,
-                                    targetQuote.QuoteID
-                                );
-
-                                logger.info('Xero quote accepted successfully', {
-                                    quoteId: targetQuote.QuoteID,
-                                    quoteNumber: xeroQuoteNumber,
-                                    newStatus: acceptedQuote.Status
-                                });
-
-                                quoteAcceptanceResult = {
-                                    accepted: true,
-                                    quoteId: targetQuote.QuoteID,
-                                    previousStatus: targetQuote.Status,
-                                    newStatus: acceptedQuote.Status
-                                };
-                            } catch (acceptError) {
-                                logger.error('Failed to accept quote', {
-                                    quoteId: targetQuote.QuoteID,
-                                    quoteNumber: xeroQuoteNumber,
-                                    error: acceptError.message
-                                });
-                                quoteAcceptanceResult = {
-                                    accepted: false,
-                                    error: acceptError.message
-                                };
-                            }
-                        }
-                    } else {
-                        logger.warn('Xero quote not found', {
-                            quoteNumber: xeroQuoteNumber,
-                            searchedQuotes: quotes.map(q => q.QuoteNumber)
-                        });
+                    if (!targetQuote) {
                         quoteAcceptanceResult = {
                             accepted: false,
-                            error: 'Quote not found'
+                            error: 'No matching sent quote found'
                         };
+                    } else if (targetQuote.Status === 'ACCEPTED') {
+                        logger.info('Quote is already accepted, skipping update', {
+                            quoteId: targetQuote.QuoteID,
+                            quoteNumber: xeroQuoteNumber
+                        });
+                        quoteAcceptanceResult = {
+                            accepted: true,
+                            alreadyAccepted: true,
+                            quoteId: targetQuote.QuoteID,
+                            error: null
+                        };
+                    } else {
+                        logger.info('Accepting Xero quote using simplified workflow', {
+                            quoteId: targetQuote.QuoteID,
+                            quoteNumber: xeroQuoteNumber,
+                            currentStatus: targetQuote.Status
+                        });
+
+                        try {
+                            const acceptedQuote = await xeroApiService.acceptXeroQuote(
+                                xeroAccessToken,
+                                xeroTenantId,
+                                targetQuote.QuoteID
+                            );
+
+                            logger.info('Xero quote accepted successfully', {
+                                quoteId: targetQuote.QuoteID,
+                                quoteNumber: xeroQuoteNumber,
+                                newStatus: acceptedQuote.Status
+                            });
+
+                            quoteAcceptanceResult = {
+                                accepted: true,
+                                quoteId: targetQuote.QuoteID,
+                                error: null
+                            };
+                        } catch (acceptError) {
+                            logger.error('Failed to accept quote', {
+                                quoteId: targetQuote.QuoteID,
+                                quoteNumber: xeroQuoteNumber,
+                                error: acceptError.message
+                            });
+                            quoteAcceptanceResult = {
+                                accepted: false,
+                                error: 'Accept failed'
+                            };
+                        }
                     }
                 }
             } catch (quoteError) {
-                logger.error('Failed to accept Xero quote', {
+                logger.error('Error during quote acceptance process', {
                     quoteNumber: xeroQuoteNumber,
-                    dealId,
-                    projectId,
                     error: quoteError.message
                 });
                 quoteAcceptanceResult = {
                     accepted: false,
-                    error: quoteError.message
+                    error: 'Accept failed'
                 };
             }
-        } else {
-            logger.info('No Xero quote number provided, skipping quote acceptance', {
-                dealId,
-                projectId
-            });
         }
-
-        logger.info('Xero project created successfully', {
-            projectId: projectId,
-            projectName: projectData.name,
-            contactId: xeroContactId,
-            tasksCreated: createdTasks.length,
-            quoteAccepted: quoteAcceptanceResult?.accepted || false
-        });
 
         return {
             projectCreated: true,
-            projectId: projectId,
-            projectName: projectData.name,
-            contactId: xeroContactId,
+            projectId,
             tasks: createdTasks,
             quote: quoteAcceptanceResult
         };
 
     } catch (error) {
-        logger.error('Failed to create Xero project', {
-            companyId,
+        logger.error('Error during Xero integration', {
             dealId,
-            projectNumber,
-            error: error.message
+            error: error.message,
+            stack: error.stack
         });
-        
         return {
             projectCreated: false,
-            error: error.message,
-            message: 'Xero project creation failed'
+            error: error.message
         };
     }
 }
