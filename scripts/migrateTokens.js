@@ -15,7 +15,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { storeAuthToken } from '../services/secureTokenService.js';
 import { ensureCollection } from '../models/mongoSchemas.js';
-import { connectToDatabase } from '../lib/database.js';
+import { withDatabase } from '../services/mongoService.js';
 import logger from '../lib/logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -228,13 +228,14 @@ async function main() {
     logger.info('Starting token migration process');
     
     try {
-        // Connect to database
-        const db = await connectToDatabase();
-        logger.info('Connected to database');
-        
-        // Ensure auth_tokens collection exists
-        await ensureCollection(db, 'auth_tokens');
-        logger.info('Auth tokens collection ready');
+        // Initialize database and ensure collection exists
+        await withDatabase(async (db) => {
+            logger.info('Connected to database');
+            
+            // Ensure auth_tokens collection exists
+            await ensureCollection(db, 'auth_tokens');
+            logger.info('Auth tokens collection ready');
+        });
         
         // Create backup of existing files
         await backupTokenFiles();

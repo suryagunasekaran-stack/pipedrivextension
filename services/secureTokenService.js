@@ -18,7 +18,7 @@
 import 'dotenv/config';
 import crypto from 'crypto';
 import axios from 'axios';
-import { getDatabase } from '../lib/database.js';
+import { withDatabase } from './mongoService.js';
 import logger from '../lib/logger.js';
 
 // Encryption configuration
@@ -139,63 +139,64 @@ function getCacheKey(companyId, service) {
  * @returns {Promise<void>}
  */
 export async function storeAuthToken(companyId, service, tokenData) {
-    const db = await getDatabase();
-    const collection = db.collection('auth_tokens');
-    
-    const encryptedAccessToken = encryptToken(tokenData.accessToken);
-    const encryptedRefreshToken = encryptToken(tokenData.refreshToken);
-    
-    const tokenDoc = {
-        companyId: companyId.toString(),
-        service,
-        encryptedAccessToken: JSON.stringify(encryptedAccessToken),
-        tokenExpiresAt: new Date(tokenData.tokenExpiresAt),
-        createdAt: new Date(),
-        lastUsedAt: new Date(),
-        isActive: true
-    };
-    
-    // Only add fields that have values to avoid validation errors
-    if (encryptedRefreshToken) {
-        tokenDoc.encryptedRefreshToken = JSON.stringify(encryptedRefreshToken);
-    }
-    
-    if (tokenData.apiDomain) {
-        tokenDoc.apiDomain = tokenData.apiDomain;
-    }
-    
-    if (tokenData.tenantId) {
-        tokenDoc.tenantId = tokenData.tenantId;
-    }
-    
-    try {
-        await collection.replaceOne(
-            { companyId: companyId.toString(), service },
-            tokenDoc,
-            { upsert: true }
-        );
+    return withDatabase(async (db) => {
+        const collection = db.collection('auth_tokens');
         
-        // Update cache
-        const cacheKey = getCacheKey(companyId, service);
-        tokenCache.set(cacheKey, {
-            data: tokenData,
-            timestamp: Date.now()
-        });
+        const encryptedAccessToken = encryptToken(tokenData.accessToken);
+        const encryptedRefreshToken = encryptToken(tokenData.refreshToken);
         
-        logger.info('Auth token stored successfully', {
-            companyId,
+        const tokenDoc = {
+            companyId: companyId.toString(),
             service,
-            expiresAt: tokenDoc.tokenExpiresAt
-        });
+            encryptedAccessToken: JSON.stringify(encryptedAccessToken),
+            tokenExpiresAt: new Date(tokenData.tokenExpiresAt),
+            createdAt: new Date(),
+            lastUsedAt: new Date(),
+            isActive: true
+        };
         
-    } catch (error) {
-        logger.error('Failed to store auth token', {
-            companyId,
-            service,
-            error: error.message
-        });
-        throw new Error(`Failed to store ${service} token for company ${companyId}`);
-    }
+        // Only add fields that have values to avoid validation errors
+        if (encryptedRefreshToken) {
+            tokenDoc.encryptedRefreshToken = JSON.stringify(encryptedRefreshToken);
+        }
+        
+        if (tokenData.apiDomain) {
+            tokenDoc.apiDomain = tokenData.apiDomain;
+        }
+        
+        if (tokenData.tenantId) {
+            tokenDoc.tenantId = tokenData.tenantId;
+        }
+        
+        try {
+            await collection.replaceOne(
+                { companyId: companyId.toString(), service },
+                tokenDoc,
+                { upsert: true }
+            );
+            
+            // Update cache
+            const cacheKey = getCacheKey(companyId, service);
+            tokenCache.set(cacheKey, {
+                data: tokenData,
+                timestamp: Date.now()
+            });
+            
+            logger.info('Auth token stored successfully', {
+                companyId,
+                service,
+                expiresAt: tokenDoc.tokenExpiresAt
+            });
+            
+        } catch (error) {
+            logger.error('Failed to store auth token', {
+                companyId,
+                service,
+                error: error.message
+            });
+            throw new Error(`Failed to store ${service} token for company ${companyId}`);
+        }
+    });
 }
 
 /**
@@ -215,56 +216,57 @@ export async function getAuthToken(companyId, service) {
         return cached.data;
     }
     
-    const db = await getDatabase();
-    const collection = db.collection('auth_tokens');
-    
-    try {
-        const tokenDoc = await collection.findOne({
-            companyId: companyId.toString(),
-            service,
-            isActive: true
-        });
+    return withDatabase(async (db) => {
+        const collection = db.collection('auth_tokens');
         
-        if (!tokenDoc) {
-            logger.debug('No active token found', { companyId, service });
+        try {
+            const tokenDoc = await collection.findOne({
+                companyId: companyId.toString(),
+                service,
+                isActive: true
+            });
+            
+            if (!tokenDoc) {
+                logger.debug('No active token found', { companyId, service });
+                return null;
+            }
+            
+            // Update last used timestamp
+            await collection.updateOne(
+                { _id: tokenDoc._id },
+                { $set: { lastUsedAt: new Date() } }
+            );
+            
+            // Decrypt tokens
+            const encryptedAccessToken = JSON.parse(tokenDoc.encryptedAccessToken);
+            const encryptedRefreshToken = JSON.parse(tokenDoc.encryptedRefreshToken || 'null');
+            
+            const tokenData = {
+                accessToken: decryptToken(encryptedAccessToken),
+                refreshToken: decryptToken(encryptedRefreshToken),
+                apiDomain: tokenDoc.apiDomain,
+                tenantId: tokenDoc.tenantId,
+                tokenExpiresAt: tokenDoc.tokenExpiresAt.getTime()
+            };
+            
+            // Update cache
+            tokenCache.set(cacheKey, {
+                data: tokenData,
+                timestamp: Date.now()
+            });
+            
+            logger.debug('Token retrieved from database', { companyId, service });
+            return tokenData;
+            
+        } catch (error) {
+            logger.error('Failed to retrieve auth token', {
+                companyId,
+                service,
+                error: error.message
+            });
             return null;
         }
-        
-        // Update last used timestamp
-        await collection.updateOne(
-            { _id: tokenDoc._id },
-            { $set: { lastUsedAt: new Date() } }
-        );
-        
-        // Decrypt tokens
-        const encryptedAccessToken = JSON.parse(tokenDoc.encryptedAccessToken);
-        const encryptedRefreshToken = JSON.parse(tokenDoc.encryptedRefreshToken || 'null');
-        
-        const tokenData = {
-            accessToken: decryptToken(encryptedAccessToken),
-            refreshToken: decryptToken(encryptedRefreshToken),
-            apiDomain: tokenDoc.apiDomain,
-            tenantId: tokenDoc.tenantId,
-            tokenExpiresAt: tokenDoc.tokenExpiresAt.getTime()
-        };
-        
-        // Update cache
-        tokenCache.set(cacheKey, {
-            data: tokenData,
-            timestamp: Date.now()
-        });
-        
-        logger.debug('Token retrieved from database', { companyId, service });
-        return tokenData;
-        
-    } catch (error) {
-        logger.error('Failed to retrieve auth token', {
-            companyId,
-            service,
-            error: error.message
-        });
-        return null;
-    }
+    });
 }
 
 /**
@@ -387,28 +389,29 @@ export async function refreshXeroToken(companyId) {
  * @returns {Promise<void>}
  */
 export async function deactivateAuthToken(companyId, service) {
-    const db = await getDatabase();
-    const collection = db.collection('auth_tokens');
-    
-    try {
-        await collection.updateOne(
-            { companyId: companyId.toString(), service },
-            { $set: { isActive: false, lastUsedAt: new Date() } }
-        );
+    return withDatabase(async (db) => {
+        const collection = db.collection('auth_tokens');
         
-        // Remove from cache
-        const cacheKey = getCacheKey(companyId, service);
-        tokenCache.delete(cacheKey);
-        
-        logger.info('Auth token deactivated', { companyId, service });
-        
-    } catch (error) {
-        logger.error('Failed to deactivate auth token', {
-            companyId,
-            service,
-            error: error.message
-        });
-    }
+        try {
+            await collection.updateOne(
+                { companyId: companyId.toString(), service },
+                { $set: { isActive: false, lastUsedAt: new Date() } }
+            );
+            
+            // Remove from cache
+            const cacheKey = getCacheKey(companyId, service);
+            tokenCache.delete(cacheKey);
+            
+            logger.info('Auth token deactivated', { companyId, service });
+            
+        } catch (error) {
+            logger.error('Failed to deactivate auth token', {
+                companyId,
+                service,
+                error: error.message
+            });
+        }
+    });
 }
 
 /**
@@ -452,46 +455,47 @@ export async function getValidAccessToken(companyId, service) {
  * @returns {Promise<Object>} Cleanup statistics
  */
 export async function cleanupExpiredTokens() {
-    const db = await getDatabase();
-    const collection = db.collection('auth_tokens');
-    
-    const oneMonthAgo = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000));
-    
-    try {
-        // Deactivate tokens that haven't been used in 30 days
-        const inactiveResult = await collection.updateMany(
-            {
-                lastUsedAt: { $lt: oneMonthAgo },
-                isActive: true
-            },
-            {
-                $set: { isActive: false }
-            }
-        );
+    return withDatabase(async (db) => {
+        const collection = db.collection('auth_tokens');
         
-        // Delete deactivated tokens older than 90 days
-        const threeMonthsAgo = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000));
-        const deleteResult = await collection.deleteMany({
-            lastUsedAt: { $lt: threeMonthsAgo },
-            isActive: false
-        });
+        const oneMonthAgo = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000));
         
-        // Clear cache
-        tokenCache.clear();
-        
-        const stats = {
-            deactivated: inactiveResult.modifiedCount,
-            deleted: deleteResult.deletedCount,
-            timestamp: new Date()
-        };
-        
-        logger.info('Token cleanup completed', stats);
-        return stats;
-        
-    } catch (error) {
-        logger.error('Token cleanup failed', { error: error.message });
-        throw error;
-    }
+        try {
+            // Deactivate tokens that haven't been used in 30 days
+            const inactiveResult = await collection.updateMany(
+                {
+                    lastUsedAt: { $lt: oneMonthAgo },
+                    isActive: true
+                },
+                {
+                    $set: { isActive: false }
+                }
+            );
+            
+            // Delete deactivated tokens older than 90 days
+            const threeMonthsAgo = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000));
+            const deleteResult = await collection.deleteMany({
+                lastUsedAt: { $lt: threeMonthsAgo },
+                isActive: false
+            });
+            
+            // Clear cache
+            tokenCache.clear();
+            
+            const stats = {
+                deactivated: inactiveResult.modifiedCount,
+                deleted: deleteResult.deletedCount,
+                timestamp: new Date()
+            };
+            
+            logger.info('Token cleanup completed', stats);
+            return stats;
+            
+        } catch (error) {
+            logger.error('Token cleanup failed', { error: error.message });
+            throw error;
+        }
+    });
 }
 
 /**
@@ -500,36 +504,37 @@ export async function cleanupExpiredTokens() {
  * @returns {Promise<Object>} Auth statistics
  */
 export async function getAuthStatistics() {
-    const db = await getDatabase();
-    const collection = db.collection('auth_tokens');
-    
-    try {
-        const [activeTokens, totalTokens, recentActivity] = await Promise.all([
-            collection.countDocuments({ isActive: true }),
-            collection.countDocuments({}),
-            collection.countDocuments({
-                lastUsedAt: { $gte: new Date(Date.now() - (24 * 60 * 60 * 1000)) }
-            })
-        ]);
+    return withDatabase(async (db) => {
+        const collection = db.collection('auth_tokens');
         
-        const tokensByService = await collection.aggregate([
-            { $match: { isActive: true } },
-            { $group: { _id: '$service', count: { $sum: 1 } } }
-        ]).toArray();
-        
-        return {
-            activeTokens,
-            totalTokens,
-            recentActivity,
-            tokensByService: tokensByService.reduce((acc, item) => {
-                acc[item._id] = item.count;
-                return acc;
-            }, {}),
-            cacheSize: tokenCache.size
-        };
-        
-    } catch (error) {
-        logger.error('Failed to get auth statistics', { error: error.message });
-        throw error;
-    }
+        try {
+            const [activeTokens, totalTokens, recentActivity] = await Promise.all([
+                collection.countDocuments({ isActive: true }),
+                collection.countDocuments({}),
+                collection.countDocuments({
+                    lastUsedAt: { $gte: new Date(Date.now() - (24 * 60 * 60 * 1000)) }
+                })
+            ]);
+            
+            const tokensByService = await collection.aggregate([
+                { $match: { isActive: true } },
+                { $group: { _id: '$service', count: { $sum: 1 } } }
+            ]).toArray();
+            
+            return {
+                activeTokens,
+                totalTokens,
+                recentActivity,
+                tokensByService: tokensByService.reduce((acc, item) => {
+                    acc[item._id] = item.count;
+                    return acc;
+                }, {}),
+                cacheSize: tokenCache.size
+            };
+            
+        } catch (error) {
+            logger.error('Failed to get auth statistics', { error: error.message });
+            throw error;
+        }
+    });
 } 

@@ -357,37 +357,32 @@ export const checkAuthStatus = async (req, res) => {
 
         const currentTime = Date.now();
 
-        const authStatus = {
-            companyId: companyId,
-            pipedrive: {
-                authenticated: !!(pipedriveToken && pipedriveToken.accessToken),
-                tokenExpired: pipedriveToken ? currentTime >= pipedriveToken.tokenExpiresAt : true,
-                apiDomain: pipedriveToken?.apiDomain || null
-            },
-            xero: {
-                authenticated: !!(xeroToken && xeroToken.accessToken),
-                tokenExpired: xeroToken ? currentTime >= xeroToken.tokenExpiresAt : true,
-                tenantId: xeroToken?.tenantId || null
-            }
-        };
+        const pipedriveAuthenticated = !!(pipedriveToken && pipedriveToken.accessToken);
+        const xeroAuthenticated = !!(xeroToken && xeroToken.accessToken);
+        const pipedriveExpired = pipedriveToken ? currentTime >= pipedriveToken.tokenExpiresAt : true;
+        const xeroExpired = xeroToken ? currentTime >= xeroToken.tokenExpiresAt : true;
 
-        // Check if tokens need refresh
-        authStatus.pipedrive.needsRefresh = authStatus.pipedrive.authenticated && authStatus.pipedrive.tokenExpired;
-        authStatus.xero.needsRefresh = authStatus.xero.authenticated && authStatus.xero.tokenExpired;
+        // Create response matching frontend expectations
+        const authStatusResponse = {
+            authenticated: pipedriveAuthenticated && !pipedriveExpired,
+            services: {
+                pipedrive: pipedriveAuthenticated && !pipedriveExpired,
+                xero: xeroAuthenticated && !xeroExpired
+            },
+            companyId: companyId,
+            requiresXeroConnection: pipedriveAuthenticated && !xeroAuthenticated
+        };
 
         logger.info({
             operation: 'Auth Status Check',
             companyId,
-            pipedriveAuth: authStatus.pipedrive.authenticated,
-            xeroAuth: authStatus.xero.authenticated,
-            pipedriveExpired: authStatus.pipedrive.tokenExpired,
-            xeroExpired: authStatus.xero.tokenExpired
+            pipedriveAuth: pipedriveAuthenticated,
+            xeroAuth: xeroAuthenticated,
+            pipedriveExpired: pipedriveExpired,
+            xeroExpired: xeroExpired
         }, '✅ Auth status checked successfully');
 
-        res.json({
-            success: true,
-            data: authStatus
-        });
+        res.json(authStatusResponse);
     } catch (error) {
         logger.error({
             operation: 'Auth Status Check Error',

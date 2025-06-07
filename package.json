@@ -15,7 +15,10 @@
     "test:generate": "NODE_ENV=test node scripts/testCleanup.js generate",
     "test:validate": "NODE_ENV=test node scripts/testCleanup.js validate",
     "test:stats": "NODE_ENV=test node scripts/testCleanup.js stats",
-    "migrate-tokens": "node scripts/migrateTokens.js"
+    "migrate-tokens": "node scripts/migrateTokens.js",
+    "clear-tokens": "node scripts/clearTokens.js",
+    "clear-tokens:dry-run": "node scripts/clearTokens.js --dry-run",
+    "clear-tokens:deactivate": "node scripts/clearTokens.js --deactivate"
   },
   "dependencies": {
     "axios": "^1.7.2",
