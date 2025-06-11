@@ -57,16 +57,38 @@ export function mapProductsToLineItems(products, options = {}) {
     // Support discount_rate (legacy field)
     const discountRate = product.discount_rate !== undefined ? product.discount_rate : product.discountRate;
     
-    // Determine tax type - check product tax field, then use default
+    // Enhanced tax type determination with robust fallbacks
     let taxType = defaultTaxType;
+    let taxRate = 0; // Default tax rate to 0 for safety
+    
     if (product.tax !== undefined && product.tax !== null) {
-      // If tax is 0, use tax exempt type
-      if (product.tax === 0) {
-        taxType = 'EXEMPTOUTPUT'; // Tax exempt in Xero
-      } else if (product.tax > 0) {
-        // Map common tax rates to Xero tax types
-        // This mapping should be configured based on your Xero setup
-        taxType = mapTaxRateToXeroType(product.tax) || defaultTaxType;
+      const productTaxRate = parseFloat(product.tax);
+      
+      // Validate tax rate is a number
+      if (!isNaN(productTaxRate)) {
+        taxRate = productTaxRate;
+        
+        // If tax is 0 or negative, use tax-free type
+        if (productTaxRate <= 0) {
+          taxType = 'NONE'; // Most compatible tax-free option
+          taxRate = 0;
+        } else {
+          // Map positive tax rates to Xero tax types with fallback
+          const mappedTaxType = mapTaxRateToXeroType(productTaxRate);
+          if (mappedTaxType) {
+            taxType = mappedTaxType;
+          } else {
+            // Fallback: use NONE for unknown tax rates and log warning
+            console.warn(`Unknown tax rate ${productTaxRate}% for product ${product.name}, using NONE`);
+            taxType = 'NONE';
+            taxRate = 0; // Reset to 0 when falling back to NONE
+          }
+        }
+      } else {
+        // Invalid tax value, use safe defaults
+        console.warn(`Invalid tax value '${product.tax}' for product ${product.name}, using 0%`);
+        taxType = 'NONE';
+        taxRate = 0;
       }
     }
     
@@ -77,11 +99,16 @@ export function mapProductsToLineItems(products, options = {}) {
       unitAmount,
       accountCode: product.account_code || defaultAccountCode,
       taxType: taxType,
+      taxRate: taxRate // Explicitly include tax rate for clarity
     };
     
     // Add optional fields
-    if (discountRate !== undefined) lineItem.discountRate = discountRate;
-    if (product.discountAmount !== undefined) lineItem.discountAmount = product.discountAmount;
+    if (discountRate !== undefined && !isNaN(parseFloat(discountRate))) {
+      lineItem.discountRate = parseFloat(discountRate);
+    }
+    if (product.discountAmount !== undefined && !isNaN(parseFloat(product.discountAmount))) {
+      lineItem.discountAmount = parseFloat(product.discountAmount);
+    }
     if (product.unit) lineItem.unit = product.unit;
     
     // Add tracking for product ID and other metadata
@@ -106,20 +133,75 @@ export function mapProductsToLineItems(products, options = {}) {
 
 /**
  * Maps tax rate percentage to Xero tax type
- * This should be customized based on your Xero tax setup
+ * This should be customized based on your Xero configuration
  * @param {number} taxRate - Tax rate percentage
  * @returns {string|null} - Xero tax type or null
  */
 function mapTaxRateToXeroType(taxRate) {
-  // Example mappings - adjust based on your Xero configuration
+  // Ensure we're working with a number
+  const rate = parseFloat(taxRate);
+  if (isNaN(rate)) {
+    return null;
+  }
+  
+  // Round to nearest 0.1 to handle minor floating point differences
+  const roundedRate = Math.round(rate * 10) / 10;
+  
+  // Comprehensive tax mappings - adjust based on your Xero configuration
   const taxMappings = {
-    '10': 'OUTPUT', // 10% GST
-    '15': 'OUTPUT2', // 15% VAT
-    '20': 'OUTPUT2', // 20% VAT
-    '0': 'EXEMPTOUTPUT', // Tax exempt
+    // Common GST rates
+    '0': 'NONE',           // No tax
+    '5': 'OUTPUT',         // 5% GST
+    '7.5': 'OUTPUT',       // 7.5% GST
+    '10': 'OUTPUT',        // 10% GST (Australia, New Zealand)
+    '12.5': 'OUTPUT',      // 12.5% GST
+    '15': 'OUTPUT',        // 15% GST (New Zealand, South Africa)
+    
+    // Common VAT rates
+    '16': 'OUTPUT',        // 16% VAT
+    '17.5': 'OUTPUT',      // 17.5% VAT (UK historical)
+    '18': 'OUTPUT',        // 18% VAT
+    '19': 'OUTPUT',        // 19% VAT (Germany)
+    '20': 'OUTPUT',        // 20% VAT (UK, EU)
+    '21': 'OUTPUT',        // 21% VAT (Netherlands, Belgium)
+    '22': 'OUTPUT',        // 22% VAT
+    '23': 'OUTPUT',        // 23% VAT (Ireland)
+    '24': 'OUTPUT',        // 24% VAT
+    '25': 'OUTPUT',        // 25% VAT (Sweden, Denmark)
+    '27': 'OUTPUT',        // 27% VAT (Hungary)
+    
+    // Reduced rates
+    '3': 'OUTPUT',         // 3% reduced rate
+    '6': 'OUTPUT',         // 6% reduced rate
+    '9': 'OUTPUT',         // 9% reduced rate
+    '13': 'OUTPUT',        // 13% reduced rate
+    '14': 'OUTPUT',        // 14% reduced rate
   };
   
-  return taxMappings[String(taxRate)] || null;
+  // First try exact match
+  const exactMatch = taxMappings[String(roundedRate)];
+  if (exactMatch) {
+    return exactMatch;
+  }
+  
+  // If no exact match, try to find closest standard rate
+  const standardRates = [0, 5, 7.5, 10, 12.5, 15, 16, 17.5, 18, 19, 20, 21, 22, 23, 24, 25, 27];
+  let closestRate = standardRates.reduce((prev, curr) => 
+    Math.abs(curr - roundedRate) < Math.abs(prev - roundedRate) ? curr : prev
+  );
+  
+  // Only use closest rate if it's within 1% difference
+  if (Math.abs(closestRate - roundedRate) <= 1) {
+    const closestMatch = taxMappings[String(closestRate)];
+    if (closestMatch) {
+      console.warn(`Tax rate ${roundedRate}% mapped to closest standard rate ${closestRate}% (${closestMatch})`);
+      return closestMatch;
+    }
+  }
+  
+  // If all else fails, return null to trigger fallback to NONE
+  console.warn(`No suitable tax mapping found for rate ${roundedRate}%, will use NONE`);
+  return null;
 }
 
 /**

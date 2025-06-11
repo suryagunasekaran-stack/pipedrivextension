@@ -74,6 +74,7 @@ describe('Quote Creation Business Rules', () => {
           LineAmount: 201,
           AccountCode: '200',
           TaxType: 'NONE',
+          TaxRate: 0,
           Tracking: [
             {
               Name: 'ProductID',
@@ -88,6 +89,7 @@ describe('Quote Creation Business Rules', () => {
           LineAmount: 200.75,
           AccountCode: '200',
           TaxType: 'NONE',
+          TaxRate: 0,
           Tracking: [
             {
               Name: 'ProductID',

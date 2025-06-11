@@ -68,6 +68,8 @@ export const handlePipedriveAction = async (req, res) => {
         frontendRedirectUrl = `${baseFrontendUrl}/create-project-page`;
     } else if (uiAction === 'updateQuotation') {
         frontendRedirectUrl = `${baseFrontendUrl}/update-quotation-page`;
+    } else if (uiAction === 'createInvoice') {
+        frontendRedirectUrl = `${baseFrontendUrl}/create-invoice-page`;
     } else {
         frontendRedirectUrl = `${baseFrontendUrl}/pipedrive-data-view`;
     }
@@ -224,6 +226,124 @@ export const createProject = async (req, res) => {
     } catch (error) {
         // Error will be handled by the error middleware with proper logging
         throw new Error(`Failed to process project creation: ${error.message}`);
+    }
+};
+
+/**
+ * Prepares invoice creation by fetching deal details and quote information from Pipedrive.
+ * Validates deal has associated quote and returns necessary data for invoice creation.
+ * Now uses authentication middleware.
+ * 
+ * @param {Object} req - Express request object with body containing dealId and companyId
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Returns JSON with deal details, quote info, and validation status
+ * @throws {Error} Returns 400 for missing params, 404 for deal not found, 500 for API errors
+ */
+export const createInvoice = async (req, res) => {
+    const { dealId, companyId } = req.body;
+
+    logProcessing(req, 'Validating required parameters for invoice creation', { 
+        dealId: !!dealId, 
+        companyId: !!companyId 
+    });
+
+    if (!dealId || !companyId) {
+        logWarning(req, 'Missing required parameters', { dealId: !!dealId, companyId: !!companyId });
+        return res.status(400).json({ error: 'Deal ID and Company ID are required in the request body.' });
+    }
+
+    // Authentication handled by middleware - tokens available in req.pipedriveAuth
+    const { accessToken, apiDomain } = req.pipedriveAuth;
+    
+    logProcessing(req, 'Retrieved authentication tokens', { 
+        hasAccessToken: !!accessToken,
+        hasApiDomain: !!apiDomain 
+    });
+    
+    const xeroQuoteCustomFieldKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY;
+    const invoiceCustomFieldKey = process.env.PIPEDRIVE_INVOICENUMBER;
+    const xeroQuoteIdKey = process.env.PIPEDRIVE_QUOTE_ID;
+
+    logProcessing(req, 'Environment configuration loaded', {
+        hasXeroQuoteKey: !!xeroQuoteCustomFieldKey,
+        hasInvoiceCustomFieldKey: !!invoiceCustomFieldKey,
+        hasXeroQuoteIdKey: !!xeroQuoteIdKey
+    });
+
+    if (!xeroQuoteCustomFieldKey) {
+        logWarning(req, 'PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY not configured');
+    }
+
+    try {
+        logProcessing(req, 'Fetching deal details from Pipedrive', { dealId, apiDomain });
+        
+        const dealDetails = await pipedriveApiService.getDealDetails(apiDomain, accessToken, dealId);
+
+        if (!dealDetails) {
+            logWarning(req, 'Deal not found', { dealId });
+            return res.status(404).json({ error: `Deal with ID ${dealId} not found.` });
+        }
+
+        logProcessing(req, 'Deal details retrieved', {
+            dealTitle: dealDetails.title,
+            dealValue: dealDetails.value,
+            hasPersonId: !!(dealDetails.person_id && dealDetails.person_id.value),
+            hasOrgId: !!(dealDetails.org_id && dealDetails.org_id.value)
+        });
+
+        // Get quote information
+        const xeroQuoteNumber = xeroQuoteCustomFieldKey ? (dealDetails[xeroQuoteCustomFieldKey] || null) : null;
+        const xeroQuoteId = xeroQuoteIdKey ? (dealDetails[xeroQuoteIdKey] || null) : null;
+        const existingInvoiceNumber = invoiceCustomFieldKey ? (dealDetails[invoiceCustomFieldKey] || null) : null;
+
+        // Validate deal has quote
+        if (!xeroQuoteNumber && !xeroQuoteId) {
+            logWarning(req, 'Deal has no associated quote', { dealId });
+            return res.status(400).json({ 
+                error: 'Deal does not have an associated quote. Please create a quote first.',
+                validationFailure: true
+            });
+        }
+
+        // Check if invoice already exists
+        if (existingInvoiceNumber) {
+            logWarning(req, 'Deal already has an invoice', { dealId, existingInvoiceNumber });
+            return res.status(400).json({ 
+                error: `Deal already has an associated invoice: ${existingInvoiceNumber}`,
+                validationFailure: true
+            });
+        }
+
+        const frontendDealObject = { ...dealDetails };
+
+        // Add quote and invoice information
+        frontendDealObject.xero_quote_number = xeroQuoteNumber;
+        frontendDealObject.xero_quote_id = xeroQuoteId;
+        frontendDealObject.existing_invoice_number = existingInvoiceNumber;
+
+        const responseData = {
+            message: 'Invoice creation initiated. Deal details and quote information retrieved.',
+            deal: frontendDealObject,
+            xeroQuoteNumber: xeroQuoteNumber,
+            xeroQuoteId: xeroQuoteId,
+            canCreateInvoice: !!xeroQuoteNumber || !!xeroQuoteId,
+            hasExistingInvoice: !!existingInvoiceNumber
+        };
+
+        logSuccess(req, 'Deal details and quote information retrieved successfully', { 
+            dealId,
+            hasXeroQuoteNumber: !!xeroQuoteNumber,
+            hasXeroQuoteId: !!xeroQuoteId,
+            hasExistingInvoice: !!existingInvoiceNumber,
+            canCreateInvoice: responseData.canCreateInvoice,
+            responseSize: JSON.stringify(responseData).length
+        });
+
+        res.json(responseData);
+
+    } catch (error) {
+        // Error will be handled by the error middleware with proper logging
+        throw new Error(`Failed to process invoice creation preparation: ${error.message}`);
     }
 };
 

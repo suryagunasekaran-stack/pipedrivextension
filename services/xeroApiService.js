@@ -1343,3 +1343,127 @@ export const createInvoice = async (accessToken, tenantId, invoicePayload) => {
     throw error;
   }
 };
+
+/**
+ * Uploads an attachment to a Xero invoice
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {string} invoiceId - Xero invoice ID to attach the file to
+ * @param {Object} fileData - File information including path, originalname, and mimetype
+ * @returns {Promise<Object>} Attachment response from Xero
+ * @throws {Error} When attachment upload fails
+ */
+export const uploadInvoiceAttachment = async (accessToken, tenantId, invoiceId, fileData) => {
+  try {
+    const fs = await import('fs');
+    
+    logger.info('Uploading attachment to Xero invoice', {
+      invoiceId,
+      fileName: fileData.originalname,
+      fileSize: fileData.size,
+      mimeType: fileData.mimetype
+    });
+
+    // Read file as buffer
+    const fileBuffer = fs.readFileSync(fileData.path);
+    
+    // Prepare form data
+    const FormData = await import('form-data');
+    const formData = new FormData.default();
+    
+    formData.append('File', fileBuffer, {
+      filename: fileData.originalname,
+      contentType: fileData.mimetype
+    });
+
+    const response = await axios.post(
+      `https://api.xero.com/api.xro/2.0/Invoices/${invoiceId}/Attachments/${encodeURIComponent(fileData.originalname)}`,
+      formData,
+      {
+        headers: {
+          ...formData.getHeaders(),
+          Authorization: `Bearer ${accessToken}`,
+          'Xero-Tenant-Id': tenantId,
+        },
+      }
+    );
+
+    logger.info('Successfully uploaded attachment to Xero invoice', {
+      invoiceId,
+      fileName: fileData.originalname,
+      attachmentId: response.data?.Attachments?.[0]?.AttachmentID
+    });
+
+    return response.data;
+  } catch (error) {
+    logger.error('Error uploading attachment to Xero invoice', {
+      invoiceId,
+      fileName: fileData?.originalname,
+      error: error.response ? error.response.data : error.message,
+      status: error.response?.status
+    });
+    
+    throw error;
+  }
+};
+
+/**
+ * Uploads multiple attachments to a Xero invoice
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {string} invoiceId - Xero invoice ID to attach the files to
+ * @param {Array} filesData - Array of file information objects
+ * @returns {Promise<Array>} Array of attachment responses from Xero
+ * @throws {Error} When any attachment upload fails
+ */
+export const uploadMultipleInvoiceAttachments = async (accessToken, tenantId, invoiceId, filesData) => {
+  try {
+    logger.info('Uploading multiple attachments to Xero invoice', {
+      invoiceId,
+      fileCount: filesData.length,
+      fileNames: filesData.map(f => f.originalname)
+    });
+
+    const uploadPromises = filesData.map(fileData => 
+      uploadInvoiceAttachment(accessToken, tenantId, invoiceId, fileData)
+    );
+
+    const results = await Promise.allSettled(uploadPromises);
+    
+    const successful = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+    const failed = results.filter(r => r.status === 'rejected').map(r => r.reason);
+
+    if (failed.length > 0) {
+      logger.warning('Some attachments failed to upload', {
+        invoiceId,
+        successfulCount: successful.length,
+        failedCount: failed.length,
+        failedReasons: failed.map(f => f.message)
+      });
+    }
+
+    logger.info('Completed multiple attachment upload', {
+      invoiceId,
+      successfulCount: successful.length,
+      failedCount: failed.length
+    });
+
+    return {
+      successful,
+      failed,
+      totalCount: filesData.length,
+      successCount: successful.length,
+      failureCount: failed.length
+    };
+  } catch (error) {
+    logger.error('Error uploading multiple attachments to Xero invoice', {
+      invoiceId,
+      fileCount: filesData?.length,
+      error: error.message
+    });
+    
+    throw error;
+  }
+};

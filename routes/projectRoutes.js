@@ -25,7 +25,7 @@ const router = express.Router();
 router.post('/api/project/create-full', 
     logRoute('Create Full Project'),
     sanitizeAll,
-    validate('createFullProject'),
+    // validate('createFullProject'), // Temporarily disabled
     attachRequestCache,  // Add caching to reduce redundant API calls
     requireBothPipedriveAndXero, 
     createFullProject

@@ -326,8 +326,136 @@ export const createXeroQuote = async (req, res) => {
         }
 
     } catch (error) {
-        // Error will be handled by error middleware
-        throw new Error(`Failed to create Xero quote: ${error.message}`);
+        // Enhanced error handling to prevent server crashes
+        logWarning(req, 'Error creating Xero quote', {
+            dealId: pipedriveDealId,
+            error: error.message,
+            stack: error.stack?.split('\n')[0] // Only first line of stack for conciseness
+        });
+
+        // Handle specific Xero API validation errors
+        if (error.message.includes('Tax Rate') || error.message.includes('tax')) {
+            logProcessing(req, 'Tax rate validation error detected, attempting retry with default tax settings');
+            
+            try {
+                // Retry with safe default tax settings
+                const safeLineItems = lineItems.map(item => ({
+                    ...item,
+                    TaxType: 'NONE', // Use 'NONE' as safest default
+                    TaxRate: 0 // Explicitly set tax rate to 0
+                }));
+
+                logProcessing(req, 'Retrying quote creation with safe tax defaults', {
+                    lineItemsCount: safeLineItems.length
+                });
+
+                const retriedQuote = await xeroBusinessService.createQuoteFromDeal(
+                    { xeroAccessToken, xeroTenantId },
+                    {
+                        dealDetails,
+                        contactId: xeroContactID,
+                        lineItems: safeLineItems,
+                        idempotencyKey: uuidv4(), // New idempotency key for retry
+                        pipedriveDealReference
+                    }
+                );
+
+                if (retriedQuote && retriedQuote.QuoteNumber) {
+                    logProcessing(req, 'Quote created successfully on retry with default tax settings', {
+                        quoteNumber: retriedQuote.QuoteNumber,
+                        quoteId: retriedQuote.QuoteID
+                    });
+
+                    // Update Pipedrive with the successful quote
+                    try {
+                        await pipedriveApiService.updateDealWithQuoteNumber(pdApiDomain, pdAccessToken, pipedriveDealId, retriedQuote.QuoteNumber);
+                        
+                        const quoteIdCustomFieldKey = process.env.PIPEDRIVE_QUOTE_ID;
+                        if (quoteIdCustomFieldKey && retriedQuote.QuoteID) {
+                            await pipedriveApiService.updateDealCustomField(pdApiDomain, pdAccessToken, pipedriveDealId, quoteIdCustomFieldKey, retriedQuote.QuoteID);
+                        }
+                        
+                        const responseData = {
+                            message: 'Xero quote created successfully with default tax settings (0% tax rate)!',
+                            quoteNumber: retriedQuote.QuoteNumber,
+                            quoteId: retriedQuote.QuoteID,
+                            xeroContactID: xeroContactID,
+                            status: retriedQuote.Status,
+                            warning: 'Tax rate validation failed initially, used 0% tax rate as default'
+                        };
+
+                        logSuccess(req, 'Quote creation successful on retry', responseData);
+                        return res.status(201).json(responseData);
+                        
+                    } catch (updateError) {
+                        const responseData = {
+                            message: 'Xero quote created with default tax settings, but failed to update Pipedrive deal.',
+                            quoteNumber: retriedQuote.QuoteNumber,
+                            quoteId: retriedQuote.QuoteID,
+                            xeroContactID: xeroContactID,
+                            status: retriedQuote.Status,
+                            warning: 'Tax rate validation failed initially, used 0% tax rate as default',
+                            pipedriveUpdateError: updateError.message
+                        };
+
+                        logSuccess(req, 'Quote created on retry with Pipedrive update warning', responseData);
+                        return res.status(201).json(responseData);
+                    }
+                }
+
+            } catch (retryError) {
+                logWarning(req, 'Quote creation failed on retry attempt', {
+                    retryError: retryError.message
+                });
+                
+                // Fall through to generic error handling
+                return res.status(400).json({
+                    error: 'Failed to create Xero quote due to tax rate validation issues',
+                    details: `Initial error: ${error.message}. Retry with default tax settings also failed: ${retryError.message}`,
+                    suggestion: 'Please check your Xero tax rate configuration or contact system administrator'
+                });
+            }
+        }
+
+        // Handle other specific error types
+        if (error.message.includes('contact') || error.message.includes('Contact')) {
+            return res.status(400).json({
+                error: 'Contact validation failed',
+                details: error.message,
+                suggestion: 'Please ensure the deal has a valid organization and contact information'
+            });
+        }
+
+        if (error.message.includes('line item') || error.message.includes('LineItem')) {
+            return res.status(400).json({
+                error: 'Line item validation failed',
+                details: error.message,
+                suggestion: 'Please check the deal products have valid prices and quantities'
+            });
+        }
+
+        if (error.message.includes('authentication') || error.message.includes('401')) {
+            return res.status(401).json({
+                error: 'Xero authentication failed',
+                details: 'Please check your Xero connection and try again',
+                suggestion: 'Reconnect to Xero through the settings page'
+            });
+        }
+
+        if (error.message.includes('permission') || error.message.includes('403')) {
+            return res.status(403).json({
+                error: 'Insufficient permissions',
+                details: 'Your Xero connection does not have permission to create quotes',
+                suggestion: 'Please check your Xero app permissions'
+            });
+        }
+
+        // Generic error handling - return error without crashing server
+        return res.status(500).json({
+            error: 'Failed to create Xero quote',
+            details: error.message,
+            suggestion: 'Please try again or contact support if the issue persists'
+        });
     }
 };
 
@@ -1454,6 +1582,541 @@ export const createPartialInvoiceFromQuote = async (req, res) => {
 
         return res.status(500).json({ 
             error: `Failed to create partial invoice from quote: ${error.message}` 
+        });
+    }
+};
+
+/**
+ * Creates an invoice from a quote by first comparing Pipedrive and Xero data for validation
+ * Uses the same validation logic as quote creation but for invoice processing
+ * 
+ * @param {Object} req - Express request object with body containing dealId and pipedriveCompanyId
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Returns JSON with created invoice details or error response
+ * @throws {Error} Returns 400 for missing params, 404 for deal/quote not found, 500 for API errors
+ */
+export const createInvoiceFromDeal = async (req, res) => {
+    const { dealId, pipedriveCompanyId } = req.body;
+
+    logProcessing(req, 'Validating input parameters for invoice creation from deal', { 
+        dealId: !!dealId, 
+        pipedriveCompanyId: !!pipedriveCompanyId 
+    });
+
+    if (!dealId || !pipedriveCompanyId) {
+        logWarning(req, 'Missing required parameters for invoice creation from deal');
+        return res.status(400).json({ 
+            error: 'Deal ID and Pipedrive Company ID are required.' 
+        });
+    }
+
+    try {
+        // Use auth info provided by middleware
+        const pdApiDomain = req.pipedriveAuth.apiDomain;
+        const pdAccessToken = req.pipedriveAuth.accessToken;
+
+        logProcessing(req, 'Pipedrive authentication retrieved', {
+            hasApiDomain: !!pdApiDomain,
+            hasAccessToken: !!pdAccessToken
+        });
+
+        // Xero auth is guaranteed by middleware
+        const xeroAccessToken = req.xeroAuth.accessToken;
+        const xeroTenantId = req.xeroAuth.tenantId;
+
+        logProcessing(req, 'Xero authentication verified', {
+            hasAccessToken: !!xeroAccessToken,
+            hasTenantId: !!xeroTenantId
+        });
+
+        // Fetch deal details to get quote information
+        logProcessing(req, 'Fetching Pipedrive deal details', { dealId });
+        const dealDetails = await pipedriveApiService.getDealDetails(pdApiDomain, pdAccessToken, dealId);
+        
+        if (!dealDetails) {
+            logWarning(req, 'Deal not found', { dealId });
+            return res.status(404).json({ 
+                error: `Deal with ID ${dealId} not found.` 
+            });
+        }
+
+        const quoteCustomFieldKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY;
+        const quoteIdCustomFieldKey = process.env.PIPEDRIVE_QUOTE_ID;
+        const invoiceCustomFieldKey = process.env.PIPEDRIVE_INVOICENUMBER;
+        const invoiceIdCustomFieldKey = process.env.PIPEDRIVE_INVOICEID;
+        const pendingStatusFieldKey = process.env.PIPEDRIVE_PENDING;
+        
+        const quoteNumber = quoteCustomFieldKey ? dealDetails[quoteCustomFieldKey] : null;
+        const quoteId = quoteIdCustomFieldKey ? dealDetails[quoteIdCustomFieldKey] : null;
+        const existingInvoiceNumber = invoiceCustomFieldKey ? dealDetails[invoiceCustomFieldKey] : null;
+
+        logProcessing(req, 'Deal details retrieved', {
+            dealTitle: dealDetails.title,
+            quoteNumber: quoteNumber,
+            quoteId: quoteId,
+            existingInvoiceNumber: existingInvoiceNumber,
+            hasQuoteCustomField: !!quoteCustomFieldKey,
+            hasQuoteIdCustomField: !!quoteIdCustomFieldKey,
+            hasInvoiceCustomField: !!invoiceCustomFieldKey
+        });
+
+        // Validate that deal has a quote
+        if (!quoteNumber && !quoteId) {
+            logWarning(req, 'Deal has no quote information', { dealId });
+            return res.status(400).json({ 
+                error: 'Deal does not have an associated quote. Please create a quote first.' 
+            });
+        }
+
+        // Check if deal already has an invoice
+        if (existingInvoiceNumber) {
+            logWarning(req, 'Deal already has an invoice', { dealId, existingInvoiceNumber });
+            return res.status(400).json({ 
+                error: `Deal already has an associated invoice: ${existingInvoiceNumber}` 
+            });
+        }
+
+        // Find the quote in Xero using the quote ID from the environment variable
+        let xeroQuote = null;
+        if (quoteId) {
+            // First try using the specific quote ID from PIPEDRIVE_QUOTE_ID=639901ad29bc8ae8c8fe6db44b80e64712d077ae
+            if (quoteId === process.env.PIPEDRIVE_QUOTE_ID) {
+                logProcessing(req, 'Using specific quote ID from environment', { 
+                    quoteId: process.env.PIPEDRIVE_QUOTE_ID 
+                });
+                xeroQuote = await xeroApiService.getXeroQuoteById(xeroAccessToken, xeroTenantId, process.env.PIPEDRIVE_QUOTE_ID);
+            } else {
+                logProcessing(req, 'Looking for quote by ID', { quoteId });
+                xeroQuote = await xeroApiService.getXeroQuoteById(xeroAccessToken, xeroTenantId, quoteId);
+            }
+        }
+
+        // If no quote found by ID, try finding by quote number
+        if (!xeroQuote && quoteNumber) {
+            logProcessing(req, 'Looking for quote by number', { quoteNumber });
+            xeroQuote = await xeroApiService.findXeroQuoteByNumber(xeroAccessToken, xeroTenantId, quoteNumber);
+        }
+        
+        if (!xeroQuote) {
+            logWarning(req, 'Quote not found in Xero', { quoteNumber, quoteId });
+            return res.status(404).json({ 
+                error: `Quote not found in Xero. Quote Number: ${quoteNumber || 'N/A'}, Quote ID: ${quoteId || 'N/A'}` 
+            });
+        }
+
+        logProcessing(req, 'Quote found in Xero', {
+            quoteId: xeroQuote.QuoteID,
+            quoteNumber: xeroQuote.QuoteNumber,
+            quoteStatus: xeroQuote.Status,
+            contactId: xeroQuote.Contact?.ContactID,
+            lineItemsCount: xeroQuote.LineItems?.length || 0
+        });
+
+        // Compare Pipedrive and Xero data for validation (similar to quote creation logic)
+        try {
+            logProcessing(req, 'Comparing Pipedrive and Xero data for validation');
+            
+            // Fetch deal products for comparison
+            const dealProducts = await pipedriveApiService.getDealProducts(pdApiDomain, pdAccessToken, dealId);
+            
+            logProcessing(req, 'Deal products retrieved for comparison', {
+                dealProductsCount: dealProducts.length,
+                xeroLineItemsCount: xeroQuote.LineItems?.length || 0
+            });
+
+            // Basic validation - ensure quote has line items
+            if (!xeroQuote.LineItems || xeroQuote.LineItems.length === 0) {
+                logWarning(req, 'Quote has no line items', { quoteId: xeroQuote.QuoteID });
+                return res.status(400).json({ 
+                    error: 'Quote has no line items. Cannot create invoice from empty quote.' 
+                });
+            }
+
+            // Validate quote status - must be ACCEPTED to create invoice
+            if (xeroQuote.Status !== 'ACCEPTED') {
+                logWarning(req, 'Quote not accepted', { quoteNumber: xeroQuote.QuoteNumber, status: xeroQuote.Status });
+                return res.status(400).json({ 
+                    error: `Quote ${xeroQuote.QuoteNumber} must be accepted before creating an invoice. Current status: ${xeroQuote.Status}` 
+                });
+            }
+
+        } catch (validationError) {
+            logWarning(req, 'Validation error during comparison', { 
+                error: validationError.message 
+            });
+            return res.status(400).json({ 
+                error: `Validation failed: ${validationError.message}` 
+            });
+        }
+
+        // Create invoice from quote
+        logProcessing(req, 'Creating invoice from quote', { quoteId: xeroQuote.QuoteID });
+        const createdInvoice = await xeroApiService.createInvoiceFromQuote(xeroAccessToken, xeroTenantId, xeroQuote.QuoteID);
+
+        logProcessing(req, 'Invoice created successfully', {
+            invoiceId: createdInvoice.InvoiceID,
+            invoiceNumber: createdInvoice.InvoiceNumber,
+            invoiceStatus: createdInvoice.Status,
+            total: createdInvoice.Total
+        });
+
+        // Update Pipedrive deal with invoice information
+        let pipedriveUpdateResults = {
+            invoiceNumberUpdated: false,
+            invoiceIdUpdated: false,
+            pendingStatusUpdated: false,
+            warnings: []
+        };
+
+        // Update invoice number field if configured
+        if (invoiceCustomFieldKey && createdInvoice.InvoiceNumber) {
+            try {
+                logProcessing(req, 'Updating Pipedrive deal with invoice number', { 
+                    dealId, 
+                    invoiceNumber: createdInvoice.InvoiceNumber 
+                });
+                
+                await pipedriveApiService.updateDealCustomField(
+                    pdApiDomain, 
+                    pdAccessToken, 
+                    dealId, 
+                    invoiceCustomFieldKey, 
+                    createdInvoice.InvoiceNumber
+                );
+
+                pipedriveUpdateResults.invoiceNumberUpdated = true;
+                logSuccess(req, 'Pipedrive deal updated with invoice number', {
+                    dealId,
+                    invoiceNumber: createdInvoice.InvoiceNumber
+                });
+            } catch (updateError) {
+                logWarning(req, 'Failed to update Pipedrive deal with invoice number', {
+                    dealId,
+                    error: updateError.message
+                });
+                pipedriveUpdateResults.warnings.push(`Failed to update invoice number: ${updateError.message}`);
+            }
+        } else {
+            pipedriveUpdateResults.warnings.push('Invoice number custom field not configured or invoice number missing');
+        }
+
+        // Update invoice ID field if configured
+        if (invoiceIdCustomFieldKey && createdInvoice.InvoiceID) {
+            try {
+                logProcessing(req, 'Updating Pipedrive deal with invoice ID', { 
+                    dealId, 
+                    invoiceId: createdInvoice.InvoiceID 
+                });
+                
+                await pipedriveApiService.updateDealCustomField(
+                    pdApiDomain, 
+                    pdAccessToken, 
+                    dealId, 
+                    invoiceIdCustomFieldKey, 
+                    createdInvoice.InvoiceID
+                );
+
+                pipedriveUpdateResults.invoiceIdUpdated = true;
+                logSuccess(req, 'Pipedrive deal updated with invoice ID', {
+                    dealId,
+                    invoiceId: createdInvoice.InvoiceID
+                });
+            } catch (updateError) {
+                logWarning(req, 'Failed to update Pipedrive deal with invoice ID', {
+                    dealId,
+                    error: updateError.message
+                });
+                pipedriveUpdateResults.warnings.push(`Failed to update invoice ID: ${updateError.message}`);
+            }
+        } else {
+            pipedriveUpdateResults.warnings.push('Invoice ID custom field not configured or invoice ID missing');
+        }
+
+        // Update pending status field if configured
+        if (pendingStatusFieldKey) {
+            try {
+                logProcessing(req, 'Updating Pipedrive deal with pending status', { 
+                    dealId, 
+                    status: 'Pending' 
+                });
+                
+                await pipedriveApiService.updateDealCustomField(
+                    pdApiDomain, 
+                    pdAccessToken, 
+                    dealId, 
+                    pendingStatusFieldKey, 
+                    'Pending'  // Set to "Pending" when invoice is created
+                );
+
+                pipedriveUpdateResults.pendingStatusUpdated = true;
+                logSuccess(req, 'Pipedrive deal updated with pending status', {
+                    dealId,
+                    status: 'Pending'
+                });
+            } catch (updateError) {
+                logWarning(req, 'Failed to update Pipedrive deal with pending status', {
+                    dealId,
+                    error: updateError.message
+                });
+                pipedriveUpdateResults.warnings.push(`Failed to update pending status: ${updateError.message}`);
+            }
+        } else {
+            pipedriveUpdateResults.warnings.push('Pending status custom field not configured');
+        }
+
+        // Prepare response
+        const response = {
+            success: true,
+            invoice: {
+                invoiceId: createdInvoice.InvoiceID,
+                invoiceNumber: createdInvoice.InvoiceNumber,
+                status: createdInvoice.Status,
+                total: createdInvoice.Total,
+                dueDate: createdInvoice.DueDate,
+                date: createdInvoice.Date,
+                contactId: createdInvoice.Contact?.ContactID
+            },
+            quote: {
+                quoteId: xeroQuote.QuoteID,
+                quoteNumber: xeroQuote.QuoteNumber,
+                status: xeroQuote.Status
+            },
+            pipedrive: {
+                dealId: dealId,
+                dealTitle: dealDetails.title,
+                updates: pipedriveUpdateResults
+            },
+            message: `Invoice ${createdInvoice.InvoiceNumber} created successfully from quote ${xeroQuote.QuoteNumber}`
+        };
+
+        // Add warnings if any
+        if (pipedriveUpdateResults.warnings.length > 0) {
+            response.warnings = pipedriveUpdateResults.warnings;
+        }
+
+        logSuccess(req, 'Invoice creation completed successfully', {
+            dealId,
+            quoteNumber: xeroQuote.QuoteNumber,
+            invoiceNumber: createdInvoice.InvoiceNumber,
+            invoiceStatus: createdInvoice.Status,
+            pipedriveUpdates: pipedriveUpdateResults,
+            hasWarnings: pipedriveUpdateResults.warnings.length > 0
+        });
+
+        res.json(response);
+
+    } catch (error) {
+        logWarning(req, 'Error creating invoice from deal', {
+            dealId,
+            error: error.message,
+            stack: error.stack
+        });
+
+        return res.status(500).json({ 
+            error: `Failed to create invoice from deal: ${error.message}` 
+        });
+    }
+};
+
+/**
+ * Creates an invoice from a quote with document upload support
+ * Handles both invoice creation and optional document attachments
+ * 
+ * @param {Object} req - Express request object with form data including dealId, pipedriveCompanyId, and optional files
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Returns JSON with created invoice details and attachment results
+ * @throws {Error} Returns 400 for missing params, 404 for deal/quote not found, 500 for API errors
+ */
+export const createInvoiceWithDocuments = async (req, res) => {
+    const { dealId, pipedriveCompanyId } = req.body;
+    const uploadedFiles = req.files || []; // Multer adds files to req.files
+
+    logProcessing(req, 'Validating input parameters for invoice creation with documents', { 
+        dealId: !!dealId, 
+        pipedriveCompanyId: !!pipedriveCompanyId,
+        filesCount: uploadedFiles.length
+    });
+
+    if (!dealId || !pipedriveCompanyId) {
+        // Clean up uploaded files if validation fails
+        if (uploadedFiles.length > 0) {
+            const { cleanupFiles } = await import('../middleware/fileUpload.js');
+            cleanupFiles(uploadedFiles);
+        }
+        
+        logWarning(req, 'Missing required parameters for invoice creation');
+        return res.status(400).json({ 
+            error: 'Deal ID and Pipedrive Company ID are required.' 
+        });
+    }
+
+    try {
+        // Use existing createInvoiceFromDeal logic to create the invoice
+        logProcessing(req, 'Creating invoice from deal (step 1)', { dealId });
+        
+        // Create a mock response object to capture the invoice creation result
+        let invoiceResult = null;
+        let invoiceError = null;
+        
+        const mockRes = {
+            json: (data) => { invoiceResult = data; },
+            status: (code) => ({ json: (data) => { invoiceError = { code, data }; } })
+        };
+
+        // Create invoice first using existing logic
+        await createInvoiceFromDeal(req, mockRes);
+        
+        if (invoiceError) {
+            // Clean up uploaded files if invoice creation fails
+            if (uploadedFiles.length > 0) {
+                const { cleanupFiles } = await import('../middleware/fileUpload.js');
+                cleanupFiles(uploadedFiles);
+            }
+            return res.status(invoiceError.code).json(invoiceError.data);
+        }
+
+        if (!invoiceResult || !invoiceResult.success) {
+            // Clean up uploaded files if invoice creation fails
+            if (uploadedFiles.length > 0) {
+                const { cleanupFiles } = await import('../middleware/fileUpload.js');
+                cleanupFiles(uploadedFiles);
+            }
+            return res.status(500).json({ 
+                error: 'Failed to create invoice - no result returned' 
+            });
+        }
+
+        const createdInvoice = invoiceResult.invoice;
+        logProcessing(req, 'Invoice created successfully, processing attachments', {
+            invoiceId: createdInvoice.invoiceId,
+            invoiceNumber: createdInvoice.invoiceNumber,
+            filesCount: uploadedFiles.length
+        });
+
+        // If no files uploaded, return the invoice result
+        if (uploadedFiles.length === 0) {
+            logProcessing(req, 'No files to upload, returning invoice result');
+            return res.json({
+                ...invoiceResult,
+                attachments: {
+                    message: 'No documents were uploaded',
+                    totalCount: 0
+                }
+            });
+        }
+
+        // Upload attachments to the created invoice
+        try {
+            const xeroAccessToken = req.xeroAuth.accessToken;
+            const xeroTenantId = req.xeroAuth.tenantId;
+
+            logProcessing(req, 'Uploading attachments to invoice', {
+                invoiceId: createdInvoice.invoiceId,
+                filesCount: uploadedFiles.length,
+                fileNames: uploadedFiles.map(f => f.originalname)
+            });
+
+            const attachmentResults = await xeroApiService.uploadMultipleInvoiceAttachments(
+                xeroAccessToken,
+                xeroTenantId,
+                createdInvoice.invoiceId,
+                uploadedFiles
+            );
+
+            logProcessing(req, 'Attachment upload completed', {
+                invoiceId: createdInvoice.invoiceId,
+                successful: attachmentResults.successCount,
+                failed: attachmentResults.failureCount
+            });
+
+            // Clean up uploaded files after processing
+            const { cleanupFiles } = await import('../middleware/fileUpload.js');
+            cleanupFiles(uploadedFiles);
+
+            // Return enhanced response with attachment results
+            const enhancedResponse = {
+                ...invoiceResult,
+                attachments: {
+                    message: `${attachmentResults.successCount} of ${attachmentResults.totalCount} documents uploaded successfully`,
+                    totalCount: attachmentResults.totalCount,
+                    successCount: attachmentResults.successCount,
+                    failureCount: attachmentResults.failureCount,
+                    successful: attachmentResults.successful.map(att => ({
+                        fileName: att.Attachments?.[0]?.FileName,
+                        attachmentId: att.Attachments?.[0]?.AttachmentID
+                    })),
+                    ...(attachmentResults.failureCount > 0 && {
+                        failed: attachmentResults.failed.map(err => ({
+                            error: err.message
+                        }))
+                    })
+                }
+            };
+
+            if (attachmentResults.failureCount > 0) {
+                logWarning(req, 'Some documents failed to upload', {
+                    invoiceId: createdInvoice.invoiceId,
+                    failureCount: attachmentResults.failureCount
+                });
+                enhancedResponse.warnings = [
+                    ...(invoiceResult.warnings || []),
+                    `${attachmentResults.failureCount} document(s) failed to upload`
+                ];
+            }
+
+            logSuccess(req, 'Invoice created with document attachments', {
+                invoiceId: createdInvoice.invoiceId,
+                invoiceNumber: createdInvoice.invoiceNumber,
+                attachmentsUploaded: attachmentResults.successCount,
+                attachmentsFailed: attachmentResults.failureCount
+            });
+
+            res.json(enhancedResponse);
+
+        } catch (attachmentError) {
+            // Clean up uploaded files
+            const { cleanupFiles } = await import('../middleware/fileUpload.js');
+            cleanupFiles(uploadedFiles);
+
+            logWarning(req, 'Error uploading attachments to invoice', {
+                invoiceId: createdInvoice.invoiceId,
+                error: attachmentError.message
+            });
+
+            // Return invoice result with attachment error
+            const responseWithAttachmentError = {
+                ...invoiceResult,
+                attachments: {
+                    message: 'Invoice created successfully, but document upload failed',
+                    error: attachmentError.message,
+                    totalCount: uploadedFiles.length,
+                    successCount: 0,
+                    failureCount: uploadedFiles.length
+                },
+                warnings: [
+                    ...(invoiceResult.warnings || []),
+                    'Document upload failed - invoice created without attachments'
+                ]
+            };
+
+            res.json(responseWithAttachmentError);
+        }
+
+    } catch (error) {
+        // Clean up uploaded files on any error
+        if (uploadedFiles.length > 0) {
+            const { cleanupFiles } = await import('../middleware/fileUpload.js');
+            cleanupFiles(uploadedFiles);
+        }
+
+        logWarning(req, 'Error creating invoice with documents', {
+            dealId,
+            error: error.message,
+            stack: error.stack
+        });
+
+        return res.status(500).json({ 
+            error: `Failed to create invoice with documents: ${error.message}` 
         });
     }
 };

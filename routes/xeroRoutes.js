@@ -11,6 +11,10 @@
  * - POST /api/xero/accept-quote - Accept existing Xero quote
  * - POST /api/xero/create-project - Create project in Xero
  * - PUT /api/xero/update-quotation - Update quotation on Xero using Pipedrive deal data
+ * - POST /api/xero/create-invoice-from-quote - Create invoice from existing quote
+ * - POST /api/xero/create-partial-invoice-from-quote - Create partial invoice from quote
+ * - POST /api/xero/create-invoice-from-deal - Create invoice from deal with quote validation
+ * - POST /api/xero/create-invoice-with-documents - Create invoice from deal with document attachments
  * 
  * @module routes/xeroRoutes
  */
@@ -21,6 +25,7 @@ import { requirePipedriveWithOptionalXero, requireXeroAuth, requireBothPipedrive
 import { logRoute } from '../middleware/routeLogger.js';
 import { validate, sanitizeAll } from '../middleware/inputValidation.js';
 import { attachRequestCache } from '../services/batchOperationsService.js';
+import { uploadMultiple, handleUploadError } from '../middleware/fileUpload.js';
 
 const router = express.Router();
 
@@ -94,6 +99,26 @@ router.post('/api/xero/create-partial-invoice-from-quote',
     validate('createPartialInvoiceFromQuote'),
     requireBothPipedriveAndXero, 
     xeroController.createPartialInvoiceFromQuote
+);
+
+// API to create invoice from deal (with quote validation) - requires both Pipedrive and Xero auth
+router.post('/api/xero/create-invoice-from-deal', 
+    logRoute('Create Invoice from Deal'), 
+    sanitizeAll,
+    validate('createInvoiceFromDeal'),
+    attachRequestCache,  // Add caching to reduce redundant API calls
+    requireBothPipedriveAndXero, 
+    xeroController.createInvoiceFromDeal
+);
+
+// API to create invoice from deal with document upload support - requires both Pipedrive and Xero auth
+router.post('/api/xero/create-invoice-with-documents', 
+    logRoute('Create Invoice with Documents'), 
+    uploadMultiple, // File upload middleware
+    handleUploadError, // Error handling middleware for file uploads
+    // Note: sanitizeAll is not used here as it interferes with file uploads
+    requireBothPipedriveAndXero, 
+    xeroController.createInvoiceWithDocuments
 );
 
 export default router;

@@ -111,3 +111,6 @@ dist/
 # Application-specific
 tokens.json
 xero_tokens.json
+
+# Upload directories
+uploads/

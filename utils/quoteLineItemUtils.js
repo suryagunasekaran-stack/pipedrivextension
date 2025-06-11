@@ -40,6 +40,8 @@ export function calculateLineItemTotal(lineItem) {
  */
 export function formatLineItem(lineItem) {
   if (!validateLineItem(lineItem)) throw new Error('Invalid line item values');
+  
+  // Build the base formatted line item
   const formatted = {
     Description: lineItem.description || 'N/A',
     Quantity: lineItem.quantity,
@@ -48,8 +50,47 @@ export function formatLineItem(lineItem) {
     AccountCode: lineItem.accountCode || process.env.XERO_DEFAULT_ACCOUNT_CODE || '200',
     TaxType: lineItem.taxType || process.env.XERO_DEFAULT_TAX_TYPE || 'NONE'
   };
-  if (lineItem.discountRate !== undefined) formatted.DiscountRate = lineItem.discountRate;
-  if (lineItem.discountAmount !== undefined) formatted.DiscountAmount = lineItem.discountAmount;
-  if (lineItem.tracking) formatted.Tracking = lineItem.tracking;
+  
+  // Handle tax rate with validation and fallbacks
+  if (lineItem.taxRate !== undefined && lineItem.taxRate !== null) {
+    const taxRate = parseFloat(lineItem.taxRate);
+    if (!isNaN(taxRate) && taxRate >= 0 && taxRate <= 100) {
+      // Only include TaxRate if it's a valid number
+      formatted.TaxRate = taxRate;
+    } else {
+      // If invalid tax rate, ensure we use NONE tax type
+      console.warn(`Invalid tax rate ${lineItem.taxRate} for line item, using NONE tax type`);
+      formatted.TaxType = 'NONE';
+    }
+  } else if (formatted.TaxType === 'NONE') {
+    // Explicitly set TaxRate to 0 when using NONE tax type for clarity
+    formatted.TaxRate = 0;
+  }
+  
+  // Add optional fields with validation
+  if (lineItem.discountRate !== undefined && !isNaN(parseFloat(lineItem.discountRate))) {
+    const discountRate = parseFloat(lineItem.discountRate);
+    if (discountRate >= 0 && discountRate <= 100) {
+      formatted.DiscountRate = discountRate;
+    }
+  }
+  
+  if (lineItem.discountAmount !== undefined && !isNaN(parseFloat(lineItem.discountAmount))) {
+    const discountAmount = parseFloat(lineItem.discountAmount);
+    if (discountAmount >= 0) {
+      formatted.DiscountAmount = discountAmount;
+    }
+  }
+  
+  // Add tracking information if available
+  if (lineItem.tracking && Array.isArray(lineItem.tracking) && lineItem.tracking.length > 0) {
+    formatted.Tracking = lineItem.tracking;
+  }
+  
+  // Add item code if available
+  if (lineItem.itemCode && typeof lineItem.itemCode === 'string') {
+    formatted.ItemCode = lineItem.itemCode.trim();
+  }
+  
   return formatted;
 } 

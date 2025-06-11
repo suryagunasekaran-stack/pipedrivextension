@@ -17,8 +17,16 @@ const validators = {
      * Validates a required string field
      */
     requiredString: (value, fieldName) => {
-        if (typeof value !== 'string' || value.trim().length === 0) {
-            return `${fieldName} is required and must be a non-empty string`;
+        // Handle null, undefined, or non-string types
+        if (value === null || value === undefined) {
+            return `${fieldName} is required`;
+        }
+        if (typeof value !== 'string') {
+            return `${fieldName} must be a string, received ${typeof value}`;
+        }
+        // Handle empty strings or whitespace-only strings
+        if (value.trim().length === 0) {
+            return `${fieldName} cannot be empty`;
         }
         return null;
     },
@@ -193,6 +201,13 @@ const validationSchemas = {
         }
     },
 
+    createInvoiceFromDeal: {
+        body: {
+            dealId: validators.requiredString,
+            pipedriveCompanyId: validators.requiredString
+        }
+    },
+
     // Project endpoints
     createFullProject: {
         body: {
@@ -275,18 +290,42 @@ export function validate(schemaName) {
         }
 
         if (errors.length > 0) {
+            // Create a simplified error structure for logging to avoid MAX_DEPTH issues
+            const simplifiedErrors = errors.map(error => ({
+                location: error.location,
+                message: error.message
+            }));
+            
+            // Create detailed debug info for troubleshooting
+            const debugInfo = {
+                requestBodyType: typeof req.body,
+                requestBodyKeys: req.body && typeof req.body === 'object' ? Object.keys(req.body) : [],
+                requestBodyValues: req.body && typeof req.body === 'object' ? 
+                    Object.keys(req.body).reduce((acc, key) => {
+                        const value = req.body[key];
+                        acc[key] = {
+                            type: typeof value,
+                            value: value === null ? 'null' : (value === undefined ? 'undefined' : String(value)),
+                            length: typeof value === 'string' ? value.length : 'N/A',
+                            isEmpty: value === null || value === undefined || (typeof value === 'string' && value.trim().length === 0)
+                        };
+                        return acc;
+                    }, {}) : 'No body or not an object'
+            };
+            
+            // Log validation details more specifically to avoid circular references
             logger.warn('Input validation failed', {
                 endpoint: schemaName,
-                errors,
-                body: req.body,
-                query: req.query,
-                params: req.params
+                errorCount: errors.length,
+                errors: simplifiedErrors,
+                debug: debugInfo
             });
 
             return res.status(400).json({
                 success: false,
                 error: 'Validation failed',
-                validationErrors: errors
+                validationErrors: simplifiedErrors,
+                ...(process.env.NODE_ENV === 'development' && { debug: debugInfo })
             });
         }
 
