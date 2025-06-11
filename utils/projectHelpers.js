@@ -19,6 +19,7 @@
 import * as tokenService from '../services/secureTokenService.js';
 import * as pipedriveApiService from '../services/pipedriveApiService.js';
 import * as xeroApiService from '../services/xeroApiService.js';
+import { batchOperations } from '../services/batchOperationsService.js';
 import { getNextProjectNumber } from '../models/projectSequenceModel.js';
 import logger from '../lib/logger.js';
 import { validateProjectNumber } from './projectNumberUtils.js';
@@ -210,6 +211,9 @@ export async function generateProjectNumber(dealId, departmentName, existingProj
 /**
  * Creates or finds Xero contact based on deal organization
  * 
+ * @deprecated This function has been moved to xeroBusinessService.findOrCreateXeroContact
+ * Use: import { findOrCreateXeroContact } from '../services/xeroBusinessService.js'
+ * 
  * @param {string} accessToken - Xero access token
  * @param {string} tenantId - Xero tenant ID
  * @param {Object} dealDetails - Deal details from Pipedrive
@@ -275,9 +279,8 @@ export async function createOrFindXeroContact(accessToken, tenantId, dealDetails
         }
 
         const contactData = {
-            name: orgDetails.name,
-            email: contactEmail,
-            isCustomer: true
+            Name: orgDetails.name,  // Fixed: Xero API expects 'Name' not 'name'
+            ...(contactEmail && { EmailAddress: contactEmail })  // Only add email if it exists
         };
 
         const newContact = await xeroApiService.createXeroContact(accessToken, tenantId, contactData);
@@ -303,7 +306,7 @@ export async function createOrFindXeroContact(accessToken, tenantId, dealDetails
 }
 
 /**
- * Handles Xero integration for project creation
+ * Handles Xero integration for project creation using the business service
  * 
  * @param {string} companyId - Company ID for token lookup
  * @param {Object} dealDetails - Deal details from Pipedrive
@@ -315,6 +318,9 @@ export async function createOrFindXeroContact(accessToken, tenantId, dealDetails
  * @returns {Promise<Object>} Xero integration result
  */
 export async function handleXeroIntegration(companyId, dealDetails, projectNumber, dealId, pipedriveApiDomain, pipedriveAccessToken, req) {
+    // Import the business service
+    const xeroBusinessService = await import('../services/xeroBusinessService.js');
+    
     // Xero auth is guaranteed by middleware
     let xeroAccessToken = req.xeroAuth.accessToken;
     const xeroTenantId = req.xeroAuth.tenantId;
@@ -336,295 +342,35 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
     }
 
     try {
-        // Step 1: Create or find Xero contact
-        const xeroContactId = await createOrFindXeroContact(
-            xeroAccessToken, 
-            xeroTenantId, 
-            dealDetails, 
-            pipedriveApiDomain, 
-            pipedriveAccessToken, 
-            req
-        );
-        
-        if (!xeroContactId) {
-            logger.warn('No Xero contact available, skipping Xero project creation');
-            return {
-                projectCreated: false,
-                message: 'Could not create or find Xero contact for project creation'
-            };
-        }
-
-        // Step 2: Get deal products
-        const dealProducts = await pipedriveApiService.getDealProducts(
-            pipedriveApiDomain,
-            pipedriveAccessToken,
-            dealId
-        );
-
-        // Step 3: Create Xero project
-        const vesselNameKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME;
-        const vesselName = vesselNameKey ? dealDetails[vesselNameKey] : 'Unknown Vessel';
-        
-        const projectData = {
-            contactId: xeroContactId,
-            name: `${projectNumber} - ${vesselName}`,
-            estimateAmount: dealDetails.value || null,
-            deadline: dealDetails.expected_close_date || null
-        };
-
-        logger.info('Creating Xero project', {
-            contactId: xeroContactId,
-            projectName: projectData.name,
-            estimateAmount: projectData.estimateAmount,
-            dealId
-        });
-
-        const xeroProject = await xeroApiService.createXeroProject(
-            xeroAccessToken,
-            xeroTenantId,
-            projectData,
-            null, // quoteId
+        // Use the business service to create the project with all related entities
+        logger.info('Using Xero business service to create project from deal', {
             dealId,
+            projectNumber,
             companyId
+        });
+
+        const result = await xeroBusinessService.createProjectFromDeal(
+            { xeroAccessToken, xeroTenantId },
+            dealDetails,
+            projectNumber,
+            {
+                dealId,
+                companyId,
+                pipedriveAuth: {
+                    apiDomain: pipedriveApiDomain,
+                    accessToken: pipedriveAccessToken
+                }
+            }
         );
 
-        if (!xeroProject || (!xeroProject.ProjectID && !xeroProject.projectId)) {
-            logger.warn('Project creation succeeded but no project ID found', {
-                projectData: projectData,
-                xeroResponse: xeroProject
-            });
-            return {
-                projectCreated: false,
-                error: 'Project creation response missing ProjectID'
-            };
-        }
-
-        const projectId = xeroProject.ProjectID || xeroProject.projectId;
-
-        // Step 4: Create default tasks
-        const defaultTasks = [
-            "Manhour",
-            "Overtime",
-            "Transport",
-            "Supply Labour"
-        ];
-
-        logger.info('Starting task creation for project', {
-            projectId,
-            taskCount: defaultTasks.length
+        logger.info('Xero project creation completed', {
+            projectCreated: result.projectCreated,
+            projectId: result.projectId,
+            tasksCreated: result.tasks ? result.tasks.length : 0,
+            quoteAccepted: result.quote ? result.quote.accepted : false
         });
 
-        const createdTasks = [];
-        
-        for (const taskName of defaultTasks) {
-            try {
-                logger.info(`Creating task "${taskName}" for project ${projectId}`);
-                
-                const task = await xeroApiService.createXeroTask(
-                    xeroAccessToken,
-                    xeroTenantId,
-                    projectId,
-                    taskName
-                );
-                
-                if (task && (task.TaskID || task.taskId)) {
-                    logger.info(`Task "${taskName}" created successfully`, {
-                        taskId: task.TaskID || task.taskId,
-                        taskName: task.Name || taskName
-                    });
-                    createdTasks.push(task);
-                } else {
-                    logger.warn(`No task data returned for "${taskName}"`, { projectId });
-                }
-            } catch (taskError) {
-                logger.error(`Failed to create task "${taskName}" for project ${projectId}`, {
-                    projectId,
-                    taskName,
-                    error: taskError,
-                    errorMessage: taskError.message,
-                    errorStack: taskError.stack
-                });
-            }
-        }
-
-        logger.info(`Task creation completed for project ${projectId}`, {
-            totalTasks: defaultTasks.length,
-            createdTasks: createdTasks.length
-        });
-
-        // Step 5: Handle Xero quote acceptance using Pipedrive custom field
-        let quoteAcceptanceResult = undefined;
-        
-        try {
-            logger.info('Checking for Xero quote acceptance using Pipedrive custom field', {
-                dealId,
-                projectId
-            });
-            
-            // Get the Xero quote ID from the Pipedrive custom field
-            const quoteIdCustomFieldKey = process.env.PIPEDRIVE_QUOTE_ID;
-            
-            if (!quoteIdCustomFieldKey) {
-                logger.warn('PIPEDRIVE_QUOTE_ID environment variable not configured', { dealId });
-                quoteAcceptanceResult = {
-                    accepted: false,
-                    error: 'Quote ID custom field not configured'
-                };
-            } else {
-                const xeroQuoteId = dealDetails[quoteIdCustomFieldKey];
-                
-                logger.info('Checking for quote ID in deal custom field', {
-                    dealId,
-                    customFieldKey: quoteIdCustomFieldKey,
-                    hasQuoteId: !!xeroQuoteId,
-                    quoteId: xeroQuoteId
-                });
-
-                if (!xeroQuoteId) {
-                    logger.info('No Xero quote ID found in deal custom field, skipping quote acceptance', {
-                        dealId,
-                        customFieldKey: quoteIdCustomFieldKey
-                    });
-                    quoteAcceptanceResult = {
-                        accepted: false,
-                        error: 'No quote ID found in deal custom field'
-                    };
-                } else {
-                    // Get quote details first to check status
-                    logger.info('Retrieving quote details from Xero', {
-                        quoteId: xeroQuoteId,
-                        dealId
-                    });
-
-                    try {
-                        const currentQuote = await xeroApiService.getXeroQuoteById(xeroAccessToken, xeroTenantId, xeroQuoteId);
-                        
-                        if (!currentQuote) {
-                            logger.warn('Quote not found in Xero', {
-                                quoteId: xeroQuoteId,
-                                dealId
-                            });
-                            quoteAcceptanceResult = {
-                                accepted: false,
-                                error: `Quote ${xeroQuoteId} not found in Xero`
-                            };
-                        } else if (currentQuote.Status === 'ACCEPTED') {
-                            logger.warn('Quote is already accepted, skipping update', {
-                                quoteId: xeroQuoteId,
-                                quoteNumber: currentQuote.QuoteNumber,
-                                dealId
-                            });
-                            quoteAcceptanceResult = {
-                                accepted: true,
-                                alreadyAccepted: true,
-                                quoteId: xeroQuoteId,
-                                quoteNumber: currentQuote.QuoteNumber,
-                                error: null
-                            };
-                        } else if (currentQuote.Status === 'DRAFT' || currentQuote.Status === 'SENT') {
-                            logger.info('Accepting Xero quote using enhanced approach (handles DRAFT → SENT → ACCEPTED)', {
-                                quoteId: xeroQuoteId,
-                                quoteNumber: currentQuote.QuoteNumber,
-                                currentStatus: currentQuote.Status,
-                                dealId
-                            });
-
-                            try {
-                                const acceptedQuote = await xeroApiService.acceptXeroQuote(
-                                    xeroAccessToken,
-                                    xeroTenantId,
-                                    xeroQuoteId
-                                );
-
-                                logger.info('Xero quote accepted successfully', {
-                                    quoteId: xeroQuoteId,
-                                    quoteNumber: acceptedQuote.QuoteNumber,
-                                    newStatus: acceptedQuote.Status,
-                                    originalStatus: currentQuote.Status,
-                                    dealId
-                                });
-
-                                quoteAcceptanceResult = {
-                                    accepted: true,
-                                    quoteId: xeroQuoteId,
-                                    quoteNumber: acceptedQuote.QuoteNumber,
-                                    error: null
-                                };
-                            } catch (acceptError) {
-                                logger.error('Failed to accept quote using enhanced approach', {
-                                    quoteId: xeroQuoteId,
-                                    quoteNumber: currentQuote.QuoteNumber,
-                                    currentStatus: currentQuote.Status,
-                                    dealId,
-                                    errorMessage: acceptError.message,
-                                    errorStack: acceptError.stack,
-                                    xeroApiResponse: acceptError.response?.data,
-                                    xeroApiStatus: acceptError.response?.status
-                                });
-                                
-                                quoteAcceptanceResult = {
-                                    accepted: false,
-                                    error: `Quote acceptance failed: ${acceptError.message}`,
-                                    details: acceptError.response?.data,
-                                    statusCode: acceptError.response?.status,
-                                    quoteNumber: currentQuote.QuoteNumber
-                                };
-                            }
-                        } else {
-                            logger.warn('Quote has unexpected status', {
-                                quoteId: xeroQuoteId,
-                                quoteNumber: currentQuote.QuoteNumber,
-                                status: currentQuote.Status,
-                                dealId
-                            });
-                            quoteAcceptanceResult = {
-                                accepted: false,
-                                error: `Quote has unexpected status: ${currentQuote.Status}`,
-                                quoteId: xeroQuoteId,
-                                quoteNumber: currentQuote.QuoteNumber
-                            };
-                        }
-                    } catch (quoteRetrievalError) {
-                        logger.error('Error retrieving quote details from Xero', {
-                            quoteId: xeroQuoteId,
-                            dealId,
-                            errorMessage: quoteRetrievalError.message,
-                            errorStack: quoteRetrievalError.stack,
-                            xeroApiResponse: quoteRetrievalError.response?.data,
-                            xeroApiStatus: quoteRetrievalError.response?.status
-                        });
-                        
-                        quoteAcceptanceResult = {
-                            accepted: false,
-                            error: `Failed to retrieve quote details: ${quoteRetrievalError.message}`,
-                            details: quoteRetrievalError.response?.data,
-                            statusCode: quoteRetrievalError.response?.status
-                        };
-                    }
-                }
-            }
-        } catch (quoteError) {
-            logger.error('Error during quote acceptance process using new approach', {
-                dealId,
-                errorMessage: quoteError.message,
-                errorStack: quoteError.stack,
-                xeroApiResponse: quoteError.response?.data,
-                xeroApiStatus: quoteError.response?.status
-            });
-            quoteAcceptanceResult = {
-                accepted: false,
-                error: `Quote acceptance process failed: ${quoteError.message}`,
-                details: quoteError.response?.data,
-                statusCode: quoteError.response?.status
-            };
-        }
-
-        return {
-            projectCreated: true,
-            projectId,
-            tasks: createdTasks,
-            quote: quoteAcceptanceResult
-        };
+        return result;
 
     } catch (error) {
         logger.error('Error during Xero integration', {
@@ -650,53 +396,78 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
  * @returns {Promise<Object>} Comprehensive deal data including person, organization, and products
  */
 export async function fetchDealRelatedData(apiDomain, accessToken, dealDetails, dealId, req) {
-    let personDetails = null;
-    let orgDetails = null;
-    let dealProducts = [];
-
-    // Fetch person details if available
-    if (dealDetails.person_id && dealDetails.person_id.value) {
-        try {
-            personDetails = await pipedriveApiService.getPersonDetails(
-                apiDomain, 
-                accessToken, 
-                dealDetails.person_id.value
-            );
-        } catch (personError) {
-            logger.warn('Could not fetch person details', {
-                personId: dealDetails.person_id.value,
-                error: personError.message
-            });
-        }
-    }
-
-    // Fetch organization details if available
-    if (dealDetails.org_id && dealDetails.org_id.value) {
-        try {
-            orgDetails = await pipedriveApiService.getOrganizationDetails(
-                apiDomain, 
-                accessToken, 
-                dealDetails.org_id.value
-            );
-        } catch (orgError) {
-            logger.warn('Could not fetch organization details', {
-                orgId: dealDetails.org_id.value,
-                error: orgError.message
-            });
-        }
-    }
-
-    // Fetch deal products
+    // Use batch operations to fetch all related data efficiently
+    logger.info('Fetching deal related data with batch operations', { dealId });
+    
     try {
-        dealProducts = await pipedriveApiService.getDealProducts(apiDomain, accessToken, dealId);
-    } catch (productsError) {
-        logger.warn('Could not fetch deal products', {
+        const dealData = await batchOperations.fetchDealWithRelatedEntities({
+            auth: { apiDomain, accessToken },
             dealId,
-            error: productsError.message
+            cache: req.cache || new Map()
         });
-    }
+        
+        return {
+            personDetails: dealData.person,
+            orgDetails: dealData.organization,
+            dealProducts: dealData.products
+        };
+    } catch (error) {
+        logger.error('Error in batch fetch of deal related data', {
+            dealId,
+            error: error.message
+        });
+        
+        // Fallback to individual fetches if batch fails
+        logger.warn('Falling back to individual API calls', { dealId });
+        
+        let personDetails = null;
+        let orgDetails = null;
+        let dealProducts = [];
 
-    return { personDetails, orgDetails, dealProducts };
+        // Fetch person details if available
+        if (dealDetails.person_id && dealDetails.person_id.value) {
+            try {
+                personDetails = await pipedriveApiService.getPersonDetails(
+                    apiDomain, 
+                    accessToken, 
+                    dealDetails.person_id.value
+                );
+            } catch (personError) {
+                logger.warn('Could not fetch person details', {
+                    personId: dealDetails.person_id.value,
+                    error: personError.message
+                });
+            }
+        }
+
+        // Fetch organization details if available
+        if (dealDetails.org_id && dealDetails.org_id.value) {
+            try {
+                orgDetails = await pipedriveApiService.getOrganizationDetails(
+                    apiDomain, 
+                    accessToken, 
+                    dealDetails.org_id.value
+                );
+            } catch (orgError) {
+                logger.warn('Could not fetch organization details', {
+                    orgId: dealDetails.org_id.value,
+                    error: orgError.message
+                });
+            }
+        }
+
+        // Fetch deal products
+        try {
+            dealProducts = await pipedriveApiService.getDealProducts(apiDomain, accessToken, dealId);
+        } catch (productsError) {
+            logger.warn('Could not fetch deal products', {
+                dealId,
+                error: productsError.message
+            });
+        }
+
+        return { personDetails, orgDetails, dealProducts };
+    }
 }
 
 /**

@@ -5,6 +5,7 @@
  */
 
 import * as tokenService from '../services/secureTokenService.js';
+import tokenRefreshManager from '../services/tokenRefreshManager.js';
 import logger from '../lib/logger.js';
 
 /**
@@ -50,10 +51,16 @@ export const requirePipedriveAuth = async (req, res, next) => {
 
         // Check if token needs refresh
         if (Date.now() >= tokenData.tokenExpiresAt) {
-            logger.info('Refreshing expired Pipedrive token', { companyId });
+            logger.info('Pipedrive token expired, initiating refresh', { companyId });
             
             try {
-                const refreshedToken = await tokenService.refreshPipedriveToken(companyId);
+                // Use token refresh manager to prevent race conditions
+                const refreshedToken = await tokenRefreshManager.refreshToken(
+                    companyId,
+                    'pipedrive',
+                    () => tokenService.refreshPipedriveToken(companyId)
+                );
+                
                 logger.info('Successfully refreshed Pipedrive token', { companyId });
                 
                 // Attach refreshed tokens to request
@@ -70,7 +77,9 @@ export const requirePipedriveAuth = async (req, res, next) => {
                 
                 return res.status(401).json({
                     success: false,
-                    error: 'Pipedrive token expired and refresh failed. Please re-authenticate.',
+                    error: refreshError.message.includes('rate limit') 
+                        ? refreshError.message 
+                        : 'Pipedrive token expired and refresh failed. Please re-authenticate.',
                     authRequired: true,
                     authType: 'pipedrive',
                     companyId: companyId,
@@ -132,10 +141,16 @@ export const optionalXeroAuth = async (req, res, next) => {
 
         // Check if token needs refresh
         if (Date.now() >= tokenData.tokenExpiresAt) {
-            logger.info('Refreshing expired Xero token', { companyId });
+            logger.info('Xero token expired, initiating refresh', { companyId });
             
             try {
-                const refreshedToken = await tokenService.refreshXeroToken(companyId);
+                // Use token refresh manager to prevent race conditions
+                const refreshedToken = await tokenRefreshManager.refreshToken(
+                    companyId,
+                    'xero',
+                    () => tokenService.refreshXeroToken(companyId)
+                );
+                
                 logger.info('Successfully refreshed Xero token', { companyId });
                 
                 // Attach refreshed tokens to request
@@ -216,10 +231,16 @@ export const requireXeroAuth = async (req, res, next) => {
 
         // Check if token needs refresh
         if (Date.now() >= tokenData.tokenExpiresAt) {
-            logger.info('Refreshing expired Xero token', { companyId });
+            logger.info('Xero token expired, initiating refresh', { companyId });
             
             try {
-                const refreshedToken = await tokenService.refreshXeroToken(companyId);
+                // Use token refresh manager to prevent race conditions
+                const refreshedToken = await tokenRefreshManager.refreshToken(
+                    companyId,
+                    'xero',
+                    () => tokenService.refreshXeroToken(companyId)
+                );
+                
                 logger.info('Successfully refreshed Xero token', { companyId });
                 
                 // Attach refreshed tokens to request
@@ -236,7 +257,9 @@ export const requireXeroAuth = async (req, res, next) => {
                 
                 return res.status(401).json({
                     success: false,
-                    error: 'Xero token expired and refresh failed. Please re-authenticate.',
+                    error: refreshError.message.includes('rate limit') 
+                        ? refreshError.message 
+                        : 'Xero token expired and refresh failed. Please re-authenticate.',
                     authRequired: true,
                     authType: 'xero',
                     companyId: companyId,

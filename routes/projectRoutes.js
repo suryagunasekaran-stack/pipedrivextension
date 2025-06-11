@@ -14,11 +14,21 @@
 import express from 'express';
 import { createFullProject } from '../controllers/projectController.js';
 import { requireBothPipedriveAndXero } from '../middleware/authMiddleware.js';
+import { validate, sanitizeAll } from '../middleware/inputValidation.js';
+import { logRoute } from '../middleware/routeLogger.js';
+import { attachRequestCache } from '../services/batchOperationsService.js';
 
 const router = express.Router();
 
 // Route for creating a full project with deal linking and project number generation
 // Requires BOTH Pipedrive and Xero authentication for complete project creation
-router.post('/api/project/create-full', requireBothPipedriveAndXero, createFullProject);
+router.post('/api/project/create-full', 
+    logRoute('Create Full Project'),
+    sanitizeAll,
+    validate('createFullProject'),
+    attachRequestCache,  // Add caching to reduce redundant API calls
+    requireBothPipedriveAndXero, 
+    createFullProject
+);
 
 export default router;

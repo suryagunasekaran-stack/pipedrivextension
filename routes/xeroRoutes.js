@@ -19,6 +19,8 @@ import express from 'express';
 import * as xeroController from '../controllers/xeroController.js';
 import { requirePipedriveWithOptionalXero, requireXeroAuth, requireBothPipedriveAndXero } from '../middleware/authMiddleware.js';
 import { logRoute } from '../middleware/routeLogger.js';
+import { validate, sanitizeAll } from '../middleware/inputValidation.js';
+import { attachRequestCache } from '../services/batchOperationsService.js';
 
 const router = express.Router();
 
@@ -31,6 +33,9 @@ router.get('/api/xero/status',
 // API to create Xero Quote (requires both Pipedrive and Xero auth)
 router.post('/api/xero/create-quote', 
     logRoute('Create Xero Quote'), 
+    sanitizeAll,
+    validate('createXeroQuote'),
+    attachRequestCache,  // Add caching to reduce redundant API calls
     requireBothPipedriveAndXero, 
     xeroController.createXeroQuote
 );
@@ -38,6 +43,8 @@ router.post('/api/xero/create-quote',
 // API to accept a Xero Quote (requires both Pipedrive and Xero auth)
 router.post('/api/xero/accept-quote', 
     logRoute('Accept Xero Quote'), 
+    sanitizeAll,
+    validate('acceptXeroQuote'),
     requireBothPipedriveAndXero, 
     xeroController.acceptXeroQuote
 );
@@ -45,6 +52,8 @@ router.post('/api/xero/accept-quote',
 // API to create a Xero Project (requires Xero auth)
 router.post('/api/xero/create-project', 
     logRoute('Create Xero Project'), 
+    sanitizeAll,
+    validate('createXeroProject'),
     requireXeroAuth, 
     xeroController.createXeroProject
 );
@@ -52,6 +61,9 @@ router.post('/api/xero/create-project',
 // API to update quotation on Xero using Pipedrive deal data (requires both Pipedrive and Xero auth)
 router.put('/api/xero/update-quotation', 
     logRoute('Update Quotation on Xero'), 
+    sanitizeAll,
+    validate('updateQuotationOnXero'),
+    attachRequestCache,  // Add caching to reduce redundant API calls
     requireBothPipedriveAndXero, 
     xeroController.updateQuotationOnXero
 );
@@ -59,6 +71,9 @@ router.put('/api/xero/update-quotation',
 // API to update quote with versioning (requires both Pipedrive and Xero auth)
 router.put('/api/xero/update-quote', 
     logRoute('Update Quote with Versioning'), 
+    sanitizeAll,
+    validate('updateQuoteWithVersioning'),
+    attachRequestCache,  // Add caching to reduce redundant API calls
     requireBothPipedriveAndXero, 
     xeroController.updateQuoteWithVersioning
 );
@@ -66,6 +81,8 @@ router.put('/api/xero/update-quote',
 // API to create invoice from quote (requires both Pipedrive and Xero auth)
 router.post('/api/xero/create-invoice-from-quote', 
     logRoute('Create Invoice from Quote'), 
+    sanitizeAll,
+    validate('createInvoiceFromQuote'),
     requireBothPipedriveAndXero, 
     xeroController.createInvoiceFromQuote
 );
@@ -73,6 +90,8 @@ router.post('/api/xero/create-invoice-from-quote',
 // API to create partial invoice from quote (requires both Pipedrive and Xero auth)
 router.post('/api/xero/create-partial-invoice-from-quote', 
     logRoute('Create Partial Invoice from Quote'), 
+    sanitizeAll,
+    validate('createPartialInvoiceFromQuote'),
     requireBothPipedriveAndXero, 
     xeroController.createPartialInvoiceFromQuote
 );
