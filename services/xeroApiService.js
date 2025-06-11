@@ -339,7 +339,8 @@ export const getXeroQuoteById = async (accessToken, tenantId, quoteId) => {
 };
 
 /**
- * Accepts a Xero quote by changing status from SENT to ACCEPTED using simplified approach
+ * Accepts a Xero quote by changing status to ACCEPTED using simplified approach
+ * Handles automatic progression: DRAFT → SENT → ACCEPTED if needed
  * Gets the quote by ID from Pipedrive custom field, then updates with minimal payload
  * 
  * @param {string} accessToken - Xero access token
@@ -377,12 +378,64 @@ export const acceptXeroQuote = async (accessToken, tenantId, quoteId) => {
       return currentQuote;
     }
 
-    // Check if quote can be accepted
-    if (currentQuote.Status !== 'SENT') {
-      throw new Error(`Cannot accept quote ${quoteId}. Quote must be in SENT status but is currently ${currentQuote.Status}`);
+    // Check if quote can be accepted (handle DRAFT → SENT → ACCEPTED flow)
+    if (currentQuote.Status === 'DRAFT') {
+      logger.info('Quote is in DRAFT status, will move to SENT first then ACCEPTED', {
+        quoteId,
+        quoteNumber: currentQuote.QuoteNumber,
+        currentStatus: currentQuote.Status
+      });
+      
+      // Step 2a: First move from DRAFT to SENT
+      const sentPayload = {
+        Quotes: [{
+          QuoteNumber: currentQuote.QuoteNumber,
+          Status: "SENT",
+          Contact: {
+            ContactID: currentQuote.Contact.ContactID
+          },
+          Date: currentQuote.Date
+        }]
+      };
+
+      logger.info('Moving quote from DRAFT to SENT', {
+        quoteId,
+        quoteNumber: currentQuote.QuoteNumber
+      });
+
+      const sentResponse = await axios.post(
+        `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`,
+        sentPayload,
+        {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Xero-Tenant-Id': tenantId,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          }
+        }
+      );
+
+      if (!sentResponse.data?.Quotes?.[0]) {
+        throw new Error('Failed to update quote to SENT status');
+      }
+
+      const sentQuote = sentResponse.data.Quotes[0];
+      logger.info('Quote successfully moved to SENT status', {
+        quoteId,
+        quoteNumber: sentQuote.QuoteNumber,
+        status: sentQuote.Status
+      });
+
+      // Update currentQuote reference for the acceptance step
+      currentQuote.Status = sentQuote.Status;
+      currentQuote.QuoteNumber = sentQuote.QuoteNumber;
+      
+    } else if (currentQuote.Status !== 'SENT') {
+      throw new Error(`Cannot accept quote ${quoteId}. Quote must be in DRAFT or SENT status but is currently ${currentQuote.Status}`);
     }
 
-    // Prepare simplified acceptance payload as specified
+    // Step 3: Move from SENT to ACCEPTED (final step)
     const acceptancePayload = {
       Quotes: [{
         QuoteNumber: currentQuote.QuoteNumber,
@@ -394,9 +447,10 @@ export const acceptXeroQuote = async (accessToken, tenantId, quoteId) => {
       }]
     };
 
-    logger.info('Sending quote acceptance request', {
+    logger.info('Sending final quote acceptance request (SENT → ACCEPTED)', {
       quoteId,
       contactId: currentQuote.Contact.ContactID,
+      currentStatus: currentQuote.Status,
       newStatus: 'ACCEPTED'
     });
 
@@ -916,7 +970,8 @@ export const getXeroProjects = async (accessToken, tenantId) => {
 };
 
 /**
- * Updates an existing quote in Xero
+ * Updates an existing quote in Xero with versioning support
+ * Automatically increments the version (v2, v3, etc.) when updating
  * 
  * @param {string} accessToken - Valid Xero access token
  * @param {string} tenantId - Xero tenant ID
@@ -927,14 +982,46 @@ export const getXeroProjects = async (accessToken, tenantId) => {
  */
 export const updateQuote = async (accessToken, tenantId, quoteId, quotePayload) => {
   try {
-    logger.info('Updating Xero quote', {
+    logger.info('Updating Xero quote with versioning', {
       quoteId,
       lineItemsCount: quotePayload.LineItems ? quotePayload.LineItems.length : 0
     });
 
+    // Step 1: Get current quote details to extract existing quote number
+    const currentQuote = await getXeroQuoteById(accessToken, tenantId, quoteId);
+    
+    if (!currentQuote) {
+      throw new Error(`Quote with ID ${quoteId} not found`);
+    }
+
+    const currentQuoteNumber = currentQuote.QuoteNumber;
+    logger.info('Current quote details retrieved', {
+      quoteId,
+      currentQuoteNumber,
+      currentStatus: currentQuote.Status
+    });
+
+    // Step 2: Generate versioned quote number
+    const versionedQuoteNumber = generateVersionedQuoteNumber(currentQuoteNumber);
+    
+    logger.info('Generated versioned quote number', {
+      originalNumber: currentQuoteNumber,
+      versionedNumber: versionedQuoteNumber
+    });
+
+    // Step 3: Prepare update payload with versioned quote number and proper format
+    const updatePayload = {
+      QuoteNumber: versionedQuoteNumber,
+      Contact: {
+        ContactID: currentQuote.Contact.ContactID
+      },
+      Date: currentQuote.Date,
+      ...quotePayload // Include all the payload data (LineItems, etc.)
+    };
+
     const response = await axios.post(
       `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`,
-      { Quotes: [quotePayload] },
+      { Quotes: [updatePayload] },
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -947,12 +1034,14 @@ export const updateQuote = async (accessToken, tenantId, quoteId, quotePayload) 
     
     if (response.data.Quotes && response.data.Quotes.length > 0) {
       const updatedQuote = response.data.Quotes[0];
-      logger.info('Successfully updated Xero quote', {
+      logger.info('Successfully updated Xero quote with versioning', {
         QuoteID: updatedQuote.QuoteID,
         QuoteNumber: updatedQuote.QuoteNumber,
         Status: updatedQuote.Status,
         Total: updatedQuote.Total,
-        lineItemsCount: updatedQuote.LineItems ? updatedQuote.LineItems.length : 0
+        lineItemsCount: updatedQuote.LineItems ? updatedQuote.LineItems.length : 0,
+        originalNumber: currentQuoteNumber,
+        versionedNumber: updatedQuote.QuoteNumber
       });
       return updatedQuote;
     } else {
@@ -975,6 +1064,38 @@ export const updateQuote = async (accessToken, tenantId, quoteId, quotePayload) 
     throw error;
   }
 };
+
+/**
+ * Generates a versioned quote number by incrementing the version suffix
+ * Examples: 
+ * - "QU-0032" -> "QU-0032 v2"
+ * - "QU-0032 v2" -> "QU-0032 v3" 
+ * - "QU-0032 v5" -> "QU-0032 v6"
+ * 
+ * @param {string} currentQuoteNumber - Current quote number
+ * @returns {string} Versioned quote number
+ */
+function generateVersionedQuoteNumber(currentQuoteNumber) {
+  if (!currentQuoteNumber) {
+    throw new Error('Current quote number is required for versioning');
+  }
+
+  // Check if the quote number already has a version suffix (e.g., " v2", " v3")
+  const versionRegex = /^(.+)\s+v(\d+)$/;
+  const match = currentQuoteNumber.match(versionRegex);
+  
+  if (match) {
+    // Quote already has a version, increment it
+    const baseNumber = match[1];        // e.g., "QU-0032"
+    const currentVersion = parseInt(match[2], 10); // e.g., 2
+    const nextVersion = currentVersion + 1;        // e.g., 3
+    
+    return `${baseNumber} v${nextVersion}`;       // e.g., "QU-0032 v3"
+  } else {
+    // Quote doesn't have a version, add v2
+    return `${currentQuoteNumber} v2`;            // e.g., "QU-0032 v2"
+  }
+}
 
 /**
  * Creates an invoice from an existing quote in Xero

@@ -56,6 +56,13 @@ router.put('/api/xero/update-quotation',
     xeroController.updateQuotationOnXero
 );
 
+// API to update quote with versioning (requires both Pipedrive and Xero auth)
+router.put('/api/xero/update-quote', 
+    logRoute('Update Quote with Versioning'), 
+    requireBothPipedriveAndXero, 
+    xeroController.updateQuoteWithVersioning
+);
+
 // API to create invoice from quote (requires both Pipedrive and Xero auth)
 router.post('/api/xero/create-invoice-from-quote', 
     logRoute('Create Invoice from Quote'), 

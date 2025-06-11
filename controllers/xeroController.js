@@ -848,6 +848,250 @@ export const updateQuotationOnXero = async (req, res) => {
 };
 
 /**
+ * Updates a Xero quote with versioning based on deal data
+ * 
+ * @param {Object} req - Express request object with body containing dealId, companyId, and quoteId
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Returns JSON with updated quote details or error response
+ * @throws {Error} Returns 400 for missing params, 401 for auth issues, 404 for not found, 409 for status conflicts, 500 for API errors
+ */
+export const updateQuoteWithVersioning = async (req, res) => {
+    const { dealId, companyId, quoteId } = req.body;
+
+    logProcessing(req, 'Validating input parameters for quote update with versioning', { 
+        dealId: !!dealId, 
+        companyId: !!companyId,
+        quoteId: !!quoteId
+    });
+
+    if (!dealId || !companyId || !quoteId) {
+        logWarning(req, 'Missing required parameters');
+        return res.status(400).json({ 
+            success: false,
+            error: 'Validation failed',
+            details: 'Deal ID, Company ID, and Quote ID are required',
+            code: 400
+        });
+    }
+
+    try {
+        // Use auth info provided by middleware
+        const pdApiDomain = req.pipedriveAuth.apiDomain;
+        const pdAccessToken = req.pipedriveAuth.accessToken;
+        const xeroAccessToken = req.xeroAuth.accessToken;
+        const xeroTenantId = req.xeroAuth.tenantId;
+
+        logProcessing(req, 'Authentication verified for both platforms', {
+            hasApiDomain: !!pdApiDomain,
+            hasAccessToken: !!pdAccessToken,
+            hasXeroAccessToken: !!xeroAccessToken,
+            hasXeroTenantId: !!xeroTenantId
+        });
+
+        // Step 1: Get current quote to check status
+        logProcessing(req, 'Fetching current quote from Xero', { quoteId });
+        const currentQuote = await xeroApiService.getXeroQuoteById(xeroAccessToken, xeroTenantId, quoteId);
+        
+        if (!currentQuote) {
+            logWarning(req, 'Quote not found in Xero', { quoteId });
+            return res.status(404).json({ 
+                success: false,
+                error: 'Quote not found',
+                details: `Quote with ID ${quoteId} not found in Xero`,
+                code: 404
+            });
+        }
+
+        // Step 2: Check if quote can be updated (must be DRAFT)
+        if (currentQuote.Status !== 'DRAFT') {
+            logWarning(req, 'Quote status conflict - not in DRAFT', { 
+                quoteId, 
+                currentStatus: currentQuote.Status,
+                quoteNumber: currentQuote.QuoteNumber
+            });
+            return res.status(409).json({ 
+                success: false,
+                error: 'Quote status conflict',
+                details: `Quote ${currentQuote.QuoteNumber} is in ${currentQuote.Status} status and cannot be updated. Only DRAFT quotes can be modified.`,
+                code: 409
+            });
+        }
+
+        // Step 3: Fetch updated deal products from Pipedrive
+        logProcessing(req, 'Fetching updated deal products from Pipedrive', { dealId });
+        const dealProducts = await pipedriveApiService.getDealProducts(pdApiDomain, pdAccessToken, dealId);
+        
+        logProcessing(req, 'Deal products retrieved', {
+            productsCount: dealProducts.length,
+            totalProductValue: dealProducts.reduce((sum, p) => sum + ((p.item_price || 0) * (p.quantity || 1)), 0)
+        });
+
+        // Step 4: Transform products to line items (reuse existing logic)
+        const { mapProductsToLineItems } = await import('../utils/quoteBusinessRules.js');
+        let lineItems;
+        
+        try {
+            lineItems = mapProductsToLineItems(dealProducts);
+        } catch (mappingError) {
+            logWarning(req, 'Product to line item mapping failed', {
+                error: mappingError.message,
+                productsCount: dealProducts.length
+            });
+            return res.status(400).json({ 
+                success: false,
+                error: 'Validation failed',
+                details: 'Cannot update quote with invalid line items: ' + mappingError.message,
+                code: 400
+            });
+        }
+
+        logProcessing(req, 'Line items prepared for update', {
+            lineItemsCount: lineItems.length,
+            totalAmount: lineItems.reduce((sum, item) => sum + (item.UnitAmount * item.Quantity), 0)
+        });
+
+        // Step 5: Update quote with versioning (this will use our new updateQuote function)
+        logProcessing(req, 'Updating quote in Xero with versioning', { 
+            quoteId,
+            originalQuoteNumber: currentQuote.QuoteNumber,
+            lineItemsCount: lineItems.length
+        });
+
+        const updatedQuote = await xeroApiService.updateQuote(
+            xeroAccessToken, 
+            xeroTenantId, 
+            quoteId, 
+            { LineItems: lineItems }
+        );
+
+        logSuccess(req, 'Quote updated successfully with versioning', {
+            quoteId: updatedQuote.QuoteID,
+            originalQuoteNumber: currentQuote.QuoteNumber,
+            updatedQuoteNumber: updatedQuote.QuoteNumber,
+            status: updatedQuote.Status,
+            lineItemsCount: updatedQuote.LineItems?.length || 0,
+            total: updatedQuote.Total
+        });
+
+        // Step 6: Update Pipedrive deal with new versioned quote number
+        let pipedriveUpdateWarning = null;
+        const quoteCustomFieldKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY;
+        
+        if (quoteCustomFieldKey && updatedQuote.QuoteNumber) {
+            try {
+                logProcessing(req, 'Updating Pipedrive deal with new versioned quote number', { 
+                    dealId,
+                    originalQuoteNumber: currentQuote.QuoteNumber,
+                    newQuoteNumber: updatedQuote.QuoteNumber,
+                    customFieldKey: quoteCustomFieldKey
+                });
+                
+                await pipedriveApiService.updateDealCustomField(
+                    pdApiDomain, 
+                    pdAccessToken, 
+                    dealId, 
+                    quoteCustomFieldKey, 
+                    updatedQuote.QuoteNumber
+                );
+
+                logSuccess(req, 'Pipedrive deal updated with versioned quote number', {
+                    dealId,
+                    originalQuoteNumber: currentQuote.QuoteNumber,
+                    newQuoteNumber: updatedQuote.QuoteNumber
+                });
+            } catch (pipedriveError) {
+                logWarning(req, 'Failed to update Pipedrive deal with new quote number', {
+                    dealId,
+                    error: pipedriveError.message,
+                    newQuoteNumber: updatedQuote.QuoteNumber
+                });
+                pipedriveUpdateWarning = pipedriveError.message;
+            }
+        } else {
+            logWarning(req, 'PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY not configured - skipping Pipedrive update');
+            pipedriveUpdateWarning = 'Quote custom field key not configured in environment';
+        }
+
+        // Step 7: Return success response
+        const response = {
+            success: true,
+            message: "Quote updated successfully with version increment",
+            data: {
+                dealId: dealId,
+                quoteId: updatedQuote.QuoteID,
+                originalQuoteNumber: currentQuote.QuoteNumber,
+                updatedQuoteNumber: updatedQuote.QuoteNumber,
+                status: updatedQuote.Status,
+                lineItemsUpdated: updatedQuote.LineItems?.length || 0,
+                totalAmount: updatedQuote.Total || 0,
+                currency: updatedQuote.CurrencyCode || 'USD',
+                lastUpdated: new Date().toISOString(),
+                versionHistory: {
+                    previousVersion: currentQuote.QuoteNumber,
+                    currentVersion: updatedQuote.QuoteNumber,
+                    versionIncrement: 1
+                },
+                pipedriveUpdated: !pipedriveUpdateWarning
+            }
+        };
+
+        // Add warning if Pipedrive update failed
+        if (pipedriveUpdateWarning) {
+            response.warning = `Quote updated successfully but failed to update Pipedrive deal: ${pipedriveUpdateWarning}`;
+        }
+
+        res.status(200).json(response);
+
+    } catch (error) {
+        logWarning(req, 'Error updating quote with versioning', {
+            dealId,
+            companyId,
+            quoteId,
+            error: error.message,
+            stack: error.stack
+        });
+
+        // Return appropriate error response based on error type
+        if (error.message.includes('not authenticated') || error.message.includes('Authentication failed')) {
+            return res.status(401).json({ 
+                success: false,
+                error: 'Authentication failed',
+                details: error.message,
+                code: 401
+            });
+        } else if (error.message.includes('not found')) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Quote not found',
+                details: error.message,
+                code: 404
+            });
+        } else if (error.message.includes('validation') || error.message.includes('required')) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Validation failed',
+                details: error.message,
+                code: 400
+            });
+        } else if (error.message.includes('DRAFT status') || error.message.includes('status conflict')) {
+            return res.status(409).json({ 
+                success: false,
+                error: 'Quote status conflict',
+                details: error.message,
+                code: 409
+            });
+        } else {
+            return res.status(500).json({ 
+                success: false,
+                error: 'Internal server error',
+                details: error.message,
+                code: 500
+            });
+        }
+    }
+};
+
+/**
  * Creates an invoice from a quote using the deal ID to find the quote number
  * 
  * @param {Object} req - Express request object with body containing dealId and pipedriveCompanyId

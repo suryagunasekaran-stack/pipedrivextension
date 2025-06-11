@@ -521,22 +521,8 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
                                 quoteNumber: currentQuote.QuoteNumber,
                                 error: null
                             };
-                        } else if (currentQuote.Status === 'DRAFT') {
-                            logger.warn('Quote is in DRAFT status, cannot accept directly', {
-                                quoteId: xeroQuoteId,
-                                quoteNumber: currentQuote.QuoteNumber,
-                                status: currentQuote.Status,
-                                dealId
-                            });
-                            quoteAcceptanceResult = {
-                                accepted: false,
-                                error: 'Quote must be in SENT status to be accepted',
-                                statusReason: 'DRAFT',
-                                quoteId: xeroQuoteId,
-                                quoteNumber: currentQuote.QuoteNumber
-                            };
-                        } else if (currentQuote.Status === 'SENT') {
-                            logger.info('Accepting Xero quote using new simplified approach', {
+                        } else if (currentQuote.Status === 'DRAFT' || currentQuote.Status === 'SENT') {
+                            logger.info('Accepting Xero quote using enhanced approach (handles DRAFT → SENT → ACCEPTED)', {
                                 quoteId: xeroQuoteId,
                                 quoteNumber: currentQuote.QuoteNumber,
                                 currentStatus: currentQuote.Status,
@@ -554,6 +540,7 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
                                     quoteId: xeroQuoteId,
                                     quoteNumber: acceptedQuote.QuoteNumber,
                                     newStatus: acceptedQuote.Status,
+                                    originalStatus: currentQuote.Status,
                                     dealId
                                 });
 
@@ -564,7 +551,7 @@ export async function handleXeroIntegration(companyId, dealDetails, projectNumbe
                                     error: null
                                 };
                             } catch (acceptError) {
-                                logger.error('Failed to accept quote using new approach', {
+                                logger.error('Failed to accept quote using enhanced approach', {
                                     quoteId: xeroQuoteId,
                                     quoteNumber: currentQuote.QuoteNumber,
                                     currentStatus: currentQuote.Status,
