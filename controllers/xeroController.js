@@ -211,7 +211,11 @@ export const createXeroQuote = async (req, res) => {
         // Build line items using test-driven utility
         let lineItems;
         try {
-            lineItems = mapProductsToLineItems(dealProducts);
+            const mappingOptions = {
+                defaultTaxType: process.env.XERO_DEFAULT_TAX_TYPE || 'NONE',
+                defaultAccountCode: process.env.XERO_DEFAULT_ACCOUNT_CODE || '200'
+            };
+            lineItems = mapProductsToLineItems(dealProducts, mappingOptions);
         } catch (mappingError) {
             logWarning(req, 'Product to line item mapping failed', {
                 error: mappingError.message,
@@ -869,7 +873,11 @@ export const updateQuoteWithVersioning = async (req, res) => {
         let lineItems;
         
         try {
-            lineItems = mapProductsToLineItems(dealProducts);
+            const mappingOptions = {
+                defaultTaxType: process.env.XERO_DEFAULT_TAX_TYPE || 'NONE',
+                defaultAccountCode: process.env.XERO_DEFAULT_ACCOUNT_CODE || '200'
+            };
+            lineItems = mapProductsToLineItems(dealProducts, mappingOptions);
         } catch (mappingError) {
             logWarning(req, 'Product to line item mapping failed', {
                 error: mappingError.message,

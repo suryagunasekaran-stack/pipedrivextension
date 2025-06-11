@@ -29,10 +29,11 @@ export function validateQuoteCreation(deal) {
 /**
  * Maps Pipedrive products to Xero line items
  * @param {Array} products - Array of Pipedrive products
+ * @param {Object} options - Optional configuration {defaultTaxType, defaultAccountCode}
  * @returns {Array} - Array of formatted Xero line items
  * @throws {Error} - If product data is invalid
  */
-export function mapProductsToLineItems(products) {
+export function mapProductsToLineItems(products, options = {}) {
   if (!products) {
     throw new Error('Products array is required');
   }
@@ -40,6 +41,11 @@ export function mapProductsToLineItems(products) {
   if (!Array.isArray(products)) {
     throw new Error('Products must be an array');
   }
+
+  const {
+    defaultTaxType = process.env.XERO_DEFAULT_TAX_TYPE || 'NONE',
+    defaultAccountCode = process.env.XERO_DEFAULT_ACCOUNT_CODE || '200'
+  } = options;
 
   return products.map(product => {
     // Validate required fields
@@ -50,26 +56,70 @@ export function mapProductsToLineItems(products) {
     const unitAmount = product.special_price !== undefined ? product.special_price : product.item_price;
     // Support discount_rate (legacy field)
     const discountRate = product.discount_rate !== undefined ? product.discount_rate : product.discountRate;
+    
+    // Determine tax type - check product tax field, then use default
+    let taxType = defaultTaxType;
+    if (product.tax !== undefined && product.tax !== null) {
+      // If tax is 0, use tax exempt type
+      if (product.tax === 0) {
+        taxType = 'EXEMPTOUTPUT'; // Tax exempt in Xero
+      } else if (product.tax > 0) {
+        // Map common tax rates to Xero tax types
+        // This mapping should be configured based on your Xero setup
+        taxType = mapTaxRateToXeroType(product.tax) || defaultTaxType;
+      }
+    }
+    
     // Build line item for formatting
     const lineItem = {
       description: product.name,
       quantity: product.quantity,
       unitAmount,
-      accountCode: '200',
-      taxType: 'NONE',
+      accountCode: product.account_code || defaultAccountCode,
+      taxType: taxType,
     };
+    
+    // Add optional fields
     if (discountRate !== undefined) lineItem.discountRate = discountRate;
     if (product.discountAmount !== undefined) lineItem.discountAmount = product.discountAmount;
+    if (product.unit) lineItem.unit = product.unit;
+    
+    // Add tracking for product ID and other metadata
+    const tracking = [];
     if (product.product_id) {
-      lineItem.tracking = [
-        {
-          Name: 'ProductID',
-          Option: String(product.product_id)
-        }
-      ];
+      tracking.push({
+        Name: 'ProductID',
+        Option: String(product.product_id)
+      });
     }
+    if (product.product_code) {
+      lineItem.itemCode = product.product_code;
+    }
+    
+    if (tracking.length > 0) {
+      lineItem.tracking = tracking;
+    }
+    
     return formatLineItem(lineItem);
   });
+}
+
+/**
+ * Maps tax rate percentage to Xero tax type
+ * This should be customized based on your Xero tax setup
+ * @param {number} taxRate - Tax rate percentage
+ * @returns {string|null} - Xero tax type or null
+ */
+function mapTaxRateToXeroType(taxRate) {
+  // Example mappings - adjust based on your Xero configuration
+  const taxMappings = {
+    '10': 'OUTPUT', // 10% GST
+    '15': 'OUTPUT2', // 15% VAT
+    '20': 'OUTPUT2', // 20% VAT
+    '0': 'EXEMPTOUTPUT', // Tax exempt
+  };
+  
+  return taxMappings[String(taxRate)] || null;
 }
 
 /**

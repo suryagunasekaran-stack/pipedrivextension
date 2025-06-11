@@ -339,9 +339,9 @@ export const getXeroQuoteById = async (accessToken, tenantId, quoteId) => {
 };
 
 /**
- * Accepts a Xero quote by changing status to ACCEPTED using simplified approach
+ * Accepts a Xero quote by changing status to ACCEPTED using comprehensive field preservation
  * Handles automatic progression: DRAFT → SENT → ACCEPTED if needed
- * Gets the quote by ID from Pipedrive custom field, then updates with minimal payload
+ * Preserves all existing quote data during status transitions
  * 
  * @param {string} accessToken - Xero access token
  * @param {string} tenantId - Xero tenant ID
@@ -350,12 +350,12 @@ export const getXeroQuoteById = async (accessToken, tenantId, quoteId) => {
  */
 export const acceptXeroQuote = async (accessToken, tenantId, quoteId) => {
   try {
-    logger.info('Starting Xero quote acceptance process with direct ID lookup', {
+    logger.info('Starting Xero quote acceptance process with comprehensive field preservation', {
       quoteId,
       operation: 'accept_quote_by_id'
     });
 
-    // Get current quote details using the new function
+    // Get current quote details to preserve all existing data
     const currentQuote = await getXeroQuoteById(accessToken, tenantId, quoteId);
     
     if (!currentQuote) {
@@ -366,7 +366,9 @@ export const acceptXeroQuote = async (accessToken, tenantId, quoteId) => {
       quoteId,
       currentStatus: currentQuote.Status,
       quoteNumber: currentQuote.QuoteNumber,
-      contactId: currentQuote.Contact?.ContactID
+      contactId: currentQuote.Contact?.ContactID,
+      hasCurrency: !!currentQuote.CurrencyCode,
+      hasLineItems: !!(currentQuote.LineItems && currentQuote.LineItems.length > 0)
     });
 
     // If already accepted, log warning but return the quote
@@ -378,6 +380,47 @@ export const acceptXeroQuote = async (accessToken, tenantId, quoteId) => {
       return currentQuote;
     }
 
+    // Helper function to create comprehensive payload preserving all fields
+    const createComprehensivePayload = (quote, newStatus) => {
+      return {
+        QuoteNumber: quote.QuoteNumber,
+        Status: newStatus,
+        Contact: {
+          ContactID: quote.Contact.ContactID
+        },
+        Date: quote.Date,
+        
+        // Preserve all existing quote fields
+        ...(quote.ExpiryDate && { ExpiryDate: quote.ExpiryDate }),
+        ...(quote.CurrencyCode && { CurrencyCode: quote.CurrencyCode }),
+        ...(quote.CurrencyRate && { CurrencyRate: quote.CurrencyRate }),
+        ...(quote.SubTotal && { SubTotal: quote.SubTotal }),
+        ...(quote.TotalTax && { TotalTax: quote.TotalTax }),
+        ...(quote.Total && { Total: quote.Total }),
+        ...(quote.Title && { Title: quote.Title }),
+        ...(quote.Summary && { Summary: quote.Summary }),
+        ...(quote.Terms && { Terms: quote.Terms }),
+        ...(quote.Reference && { Reference: quote.Reference }),
+        ...(quote.BrandingThemeID && { BrandingThemeID: quote.BrandingThemeID }),
+        
+        // Preserve line items with all their fields
+        ...(quote.LineItems && { 
+          LineItems: quote.LineItems.map(item => ({
+            Description: item.Description,
+            Quantity: item.Quantity,
+            UnitAmount: item.UnitAmount,
+            ...(item.LineAmount && { LineAmount: item.LineAmount }),
+            ...(item.AccountCode && { AccountCode: item.AccountCode }),
+            ...(item.TaxType && { TaxType: item.TaxType }),
+            ...(item.DiscountRate && { DiscountRate: item.DiscountRate }),
+            ...(item.DiscountAmount && { DiscountAmount: item.DiscountAmount }),
+            ...(item.Tracking && { Tracking: item.Tracking }),
+            ...(item.ItemCode && { ItemCode: item.ItemCode })
+          }))
+        })
+      };
+    };
+
     // Check if quote can be accepted (handle DRAFT → SENT → ACCEPTED flow)
     if (currentQuote.Status === 'DRAFT') {
       logger.info('Quote is in DRAFT status, will move to SENT first then ACCEPTED', {
@@ -386,21 +429,15 @@ export const acceptXeroQuote = async (accessToken, tenantId, quoteId) => {
         currentStatus: currentQuote.Status
       });
       
-      // Step 2a: First move from DRAFT to SENT
+      // Step 2a: First move from DRAFT to SENT with comprehensive field preservation
       const sentPayload = {
-        Quotes: [{
-          QuoteNumber: currentQuote.QuoteNumber,
-          Status: "SENT",
-          Contact: {
-            ContactID: currentQuote.Contact.ContactID
-          },
-          Date: currentQuote.Date
-        }]
+        Quotes: [createComprehensivePayload(currentQuote, "SENT")]
       };
 
-      logger.info('Moving quote from DRAFT to SENT', {
+      logger.info('Moving quote from DRAFT to SENT with field preservation', {
         quoteId,
-        quoteNumber: currentQuote.QuoteNumber
+        quoteNumber: currentQuote.QuoteNumber,
+        preservedFields: Object.keys(sentPayload.Quotes[0]).length
       });
 
       const sentResponse = await axios.post(
@@ -424,34 +461,29 @@ export const acceptXeroQuote = async (accessToken, tenantId, quoteId) => {
       logger.info('Quote successfully moved to SENT status', {
         quoteId,
         quoteNumber: sentQuote.QuoteNumber,
-        status: sentQuote.Status
+        status: sentQuote.Status,
+        preservedCurrency: sentQuote.CurrencyCode,
+        preservedLineItems: sentQuote.LineItems?.length || 0
       });
 
       // Update currentQuote reference for the acceptance step
-      currentQuote.Status = sentQuote.Status;
-      currentQuote.QuoteNumber = sentQuote.QuoteNumber;
+      Object.assign(currentQuote, sentQuote);
       
     } else if (currentQuote.Status !== 'SENT') {
       throw new Error(`Cannot accept quote ${quoteId}. Quote must be in DRAFT or SENT status but is currently ${currentQuote.Status}`);
     }
 
-    // Step 3: Move from SENT to ACCEPTED (final step)
+    // Step 3: Move from SENT to ACCEPTED (final step) with comprehensive field preservation
     const acceptancePayload = {
-      Quotes: [{
-        QuoteNumber: currentQuote.QuoteNumber,
-        Status: "ACCEPTED",
-        Contact: {
-          ContactID: currentQuote.Contact.ContactID
-        },
-        Date: new Date().toISOString().split('T')[0] // Current date in YYYY-MM-DD format
-      }]
+      Quotes: [createComprehensivePayload(currentQuote, "ACCEPTED")]
     };
 
-    logger.info('Sending final quote acceptance request (SENT → ACCEPTED)', {
+    logger.info('Sending final quote acceptance request (SENT → ACCEPTED) with field preservation', {
       quoteId,
       contactId: currentQuote.Contact.ContactID,
       currentStatus: currentQuote.Status,
-      newStatus: 'ACCEPTED'
+      newStatus: 'ACCEPTED',
+      preservedFields: Object.keys(acceptancePayload.Quotes[0]).length
     });
 
     // Send acceptance request to Xero
@@ -471,10 +503,13 @@ export const acceptXeroQuote = async (accessToken, tenantId, quoteId) => {
     
     const acceptedQuote = response.data.Quotes[0];
     
-    logger.info('Quote acceptance completed successfully', {
+    logger.info('Quote acceptance completed successfully with field preservation', {
       quoteId,
       finalStatus: acceptedQuote.Status,
-      quoteNumber: acceptedQuote.QuoteNumber
+      quoteNumber: acceptedQuote.QuoteNumber,
+      preservedCurrency: acceptedQuote.CurrencyCode,
+      preservedLineItems: acceptedQuote.LineItems?.length || 0,
+      preservedTotal: acceptedQuote.Total
     });
 
     return acceptedQuote;
@@ -984,10 +1019,11 @@ export const updateQuote = async (accessToken, tenantId, quoteId, quotePayload) 
   try {
     logger.info('Updating Xero quote with versioning', {
       quoteId,
+      updateFields: Object.keys(quotePayload),
       lineItemsCount: quotePayload.LineItems ? quotePayload.LineItems.length : 0
     });
 
-    // Step 1: Get current quote details to extract existing quote number
+    // Step 1: Get current quote details to preserve all existing data
     const currentQuote = await getXeroQuoteById(accessToken, tenantId, quoteId);
     
     if (!currentQuote) {
@@ -998,7 +1034,9 @@ export const updateQuote = async (accessToken, tenantId, quoteId, quotePayload) 
     logger.info('Current quote details retrieved', {
       quoteId,
       currentQuoteNumber,
-      currentStatus: currentQuote.Status
+      currentStatus: currentQuote.Status,
+      hasCurrency: !!currentQuote.CurrencyCode,
+      hasLineItems: !!(currentQuote.LineItems && currentQuote.LineItems.length > 0)
     });
 
     // Step 2: Generate versioned quote number
@@ -1009,15 +1047,43 @@ export const updateQuote = async (accessToken, tenantId, quoteId, quotePayload) 
       versionedNumber: versionedQuoteNumber
     });
 
-    // Step 3: Prepare update payload with versioned quote number and proper format
+    // Step 3: Merge the current quote data with new payload
+    // Start with all existing quote data to preserve everything
     const updatePayload = {
+      // Core fields that must be present
       QuoteNumber: versionedQuoteNumber,
       Contact: {
         ContactID: currentQuote.Contact.ContactID
       },
       Date: currentQuote.Date,
-      ...quotePayload // Include all the payload data (LineItems, etc.)
+      
+      // Preserve all existing quote fields
+      ...(currentQuote.ExpiryDate && { ExpiryDate: currentQuote.ExpiryDate }),
+      ...(currentQuote.Status && { Status: currentQuote.Status }),
+      ...(currentQuote.CurrencyCode && { CurrencyCode: currentQuote.CurrencyCode }),
+      ...(currentQuote.CurrencyRate && { CurrencyRate: currentQuote.CurrencyRate }),
+      ...(currentQuote.SubTotal && { SubTotal: currentQuote.SubTotal }),
+      ...(currentQuote.TotalTax && { TotalTax: currentQuote.TotalTax }),
+      ...(currentQuote.Total && { Total: currentQuote.Total }),
+      ...(currentQuote.Title && { Title: currentQuote.Title }),
+      ...(currentQuote.Summary && { Summary: currentQuote.Summary }),
+      ...(currentQuote.Terms && { Terms: currentQuote.Terms }),
+      ...(currentQuote.Reference && { Reference: currentQuote.Reference }),
+      ...(currentQuote.BrandingThemeID && { BrandingThemeID: currentQuote.BrandingThemeID }),
+      
+      // Include LineItems from current quote if not being updated
+      ...(currentQuote.LineItems && !quotePayload.LineItems && { LineItems: currentQuote.LineItems }),
+      
+      // Now override with any fields from the update payload
+      ...quotePayload
     };
+
+    logger.info('Merged update payload prepared', {
+      preservedFields: Object.keys(updatePayload).filter(key => currentQuote[key] !== undefined),
+      updatedFields: Object.keys(quotePayload),
+      hasLineItems: !!updatePayload.LineItems,
+      lineItemsCount: updatePayload.LineItems ? updatePayload.LineItems.length : 0
+    });
 
     const response = await axios.post(
       `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`,
@@ -1039,6 +1105,7 @@ export const updateQuote = async (accessToken, tenantId, quoteId, quotePayload) 
         QuoteNumber: updatedQuote.QuoteNumber,
         Status: updatedQuote.Status,
         Total: updatedQuote.Total,
+        CurrencyCode: updatedQuote.CurrencyCode,
         lineItemsCount: updatedQuote.LineItems ? updatedQuote.LineItems.length : 0,
         originalNumber: currentQuoteNumber,
         versionedNumber: updatedQuote.QuoteNumber

@@ -10,6 +10,7 @@
 
 import * as pipedriveApiService from '../services/pipedriveApiService.js';
 import * as xeroApiService from '../services/xeroApiService.js';
+import { mapProductsToLineItems } from './quoteBusinessRules.js';
 import logger from '../lib/logger.js';
 
 /**
@@ -51,11 +52,22 @@ export async function updateQuotationOnXero(pipedriveApiDomain, pipedriveAccessT
         // Step 5: Validate quotation status (must be DRAFT)
         validateQuotationStatus(xeroQuote, quotationNumber);
         
-        // Step 6: Transform Pipedrive products to Xero line items
-        const lineItems = transformProductsToLineItems(dealProducts);
+        // Step 6: Transform Pipedrive products to Xero line items using the enhanced mapper
+        let lineItems;
+        try {
+            const mappingOptions = {
+                defaultTaxType: process.env.XERO_DEFAULT_TAX_TYPE || 'NONE',
+                defaultAccountCode: process.env.XERO_DEFAULT_ACCOUNT_CODE || '200'
+            };
+            lineItems = mapProductsToLineItems(dealProducts, mappingOptions);
+        } catch (mappingError) {
+            logger.warn('Product mapping failed, using empty line items', { error: mappingError.message });
+            lineItems = [];
+        }
+        
         logger.info('Transformed products to line items', { productCount: dealProducts.length, lineItemCount: lineItems.length });
         
-        // Step 7: Update the quotation in Xero
+        // Step 7: Update the quotation in Xero (now properly merges data)
         logger.info('Updating quotation in Xero', { quoteId: xeroQuote.QuoteID });
         const updatedQuote = await updateXeroQuote(xeroAccessToken, xeroTenantId, xeroQuote.QuoteID, lineItems);
         
@@ -153,37 +165,6 @@ function validateQuotationStatus(xeroQuote, quotationNumber) {
     if (xeroQuote.Status !== 'DRAFT') {
         throw new Error(`Quotation ${quotationNumber} is not in DRAFT status and cannot be updated`);
     }
-}
-
-/**
- * Transforms Pipedrive products to Xero line items
- * 
- * @param {Array} dealProducts - Array of Pipedrive products
- * @returns {Array} Array of Xero line items
- */
-function transformProductsToLineItems(dealProducts) {
-    if (!Array.isArray(dealProducts)) {
-        return [];
-    }
-    
-    return dealProducts
-        .filter(product => {
-            // Filter out products with zero or negative quantity
-            return product && 
-                   typeof product.quantity === 'number' && 
-                   product.quantity > 0 &&
-                   typeof product.unit_price === 'number' &&
-                   product.name && 
-                   product.name.trim() !== '';
-        })
-        .map(product => ({
-            Description: product.name.trim(),
-            Quantity: product.quantity,
-            UnitAmount: Math.abs(product.unit_price), // Ensure positive unit amount
-            LineAmount: product.quantity * Math.abs(product.unit_price),
-            AccountCode: '200', // Default sales account
-            TaxType: 'NONE'
-        }));
 }
 
 /**

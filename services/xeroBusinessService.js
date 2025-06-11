@@ -375,7 +375,8 @@ export async function createQuoteFromDeal(auth, params) {
     logger.info('Creating quote from deal', {
         dealId: dealDetails.id,
         contactId,
-        lineItemsCount: lineItems.length
+        lineItemsCount: lineItems.length,
+        currency: dealDetails.currency
     });
 
     // Build quote payload
@@ -387,6 +388,11 @@ export async function createQuoteFromDeal(auth, params) {
         Title: dealDetails.title || 'Quote',
         Status: 'SENT' // Will be created as DRAFT then updated to SENT
     };
+
+    // Add currency if available
+    if (dealDetails.currency) {
+        quotePayload.CurrencyCode = dealDetails.currency;
+    }
 
     // Add custom fields if available
     const locationKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_LOCATION;
@@ -412,7 +418,8 @@ export async function createQuoteFromDeal(auth, params) {
     logger.info('Quote created successfully', {
         quoteId: createdQuote.QuoteID,
         quoteNumber: createdQuote.QuoteNumber,
-        status: createdQuote.Status
+        status: createdQuote.Status,
+        currency: createdQuote.CurrencyCode
     });
 
     return createdQuote;
