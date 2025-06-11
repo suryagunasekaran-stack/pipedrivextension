@@ -439,7 +439,84 @@ const xeroTenantId = req.xeroAuth.tenantId;
    await pipedriveApiService.updateDealWithQuoteNumber(pdApiDomain, pdAccessToken, pipedriveDealId, createdQuote.QuoteNumber);
    ```
 
-### 2. Create Project Feature
+### 2. Update Quotation Feature
+
+#### Entry Point
+**Route**: `POST /api/pipedrive/get-quotation-data`
+**Controller**: `pipedriveController.getQuotationData()`
+**Middleware**: `requireBothPipedriveAndXero`
+
+#### Workflow Steps
+
+1. **Request Validation**
+   ```javascript
+   // Validate required parameters
+   const { dealId, companyId } = req.body;
+   if (!dealId || !companyId) {
+     throw new Error('Deal ID and Company ID are required');
+   }
+   ```
+
+2. **Deal Data Retrieval & Quotation Extraction**
+   ```javascript
+   // Fetch deal details and extract quotation number
+   const dealDetails = await pipedriveApiService.getDealDetails(apiDomain, accessToken, dealId);
+   const xeroQuoteNumber = xeroQuoteCustomFieldKey ? (dealDetails[xeroQuoteCustomFieldKey] || null) : null;
+   ```
+
+3. **Related Data Fetching**
+   ```javascript
+   // Fetch person, organization, and product details
+   const personDetails = await pipedriveApiService.getPersonDetails(apiDomain, accessToken, dealDetails.person_id.value);
+   const organizationDetails = await pipedriveApiService.getOrganizationDetails(apiDomain, accessToken, dealDetails.org_id.value);
+   const dealProducts = await pipedriveApiService.getDealProducts(apiDomain, accessToken, dealId);
+   ```
+
+4. **Xero Quotation Fetching**
+   ```javascript
+   // Fetch existing Xero quotation for comparison
+   if (xeroQuoteNumber) {
+     const xeroQuote = await xeroApiService.findXeroQuoteByNumber(xeroAccessToken, xeroTenantId, xeroQuoteNumber);
+     
+     if (xeroQuote) {
+       xeroQuotation = {
+         quoteId: xeroQuote.QuoteID,
+         status: xeroQuote.Status,
+         lineItems: xeroQuote.LineItems || [],
+         total: xeroQuote.Total || 0
+       };
+       
+       comparisonData = {
+         canUpdate: xeroQuote.Status === 'DRAFT',
+         pipedriveProductCount: dealProducts.length,
+         xeroLineItemCount: xeroQuote.LineItems.length
+       };
+     }
+   }
+   ```
+
+5. **Response Preparation**
+   ```javascript
+   const responseData = {
+     deal: frontendDealObject,
+     quotationNumber: xeroQuoteNumber,
+     person: personDetails,
+     organization: organizationDetails,
+     products: dealProducts,
+     xeroQuotation: xeroQuotation,        // NEW: Existing Xero quotation data
+     comparison: comparisonData,          // NEW: Comparison metadata
+     metadata: {
+       dealId: dealId,
+       companyId: companyId,
+       hasQuotationNumber: !!xeroQuoteNumber,
+       hasXeroQuotation: !!xeroQuotation,
+       productsCount: dealProducts.length,
+       canUpdate: comparisonData ? comparisonData.canUpdate : false
+     }
+   };
+   ```
+
+### 3. Create Project Feature
 
 #### Entry Point
 **Route**: `POST /api/project/create-full`

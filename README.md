@@ -91,7 +91,8 @@ The application exposes the following REST API endpoints:
 
 -   **`GET /pipedrive-action`**: Handles actions triggered from a Pipedrive App Extension.
     -   Expects `companyId` and `selectedIds` (e.g., deal ID) query parameters from Pipedrive.
-    -   Redirects to a frontend URL (`http://localhost:3001/pipedrive-data-view` by default) with the Pipedrive data.
+    -   Supports different UI actions: `createProject`, `updateQuotation`, or default behavior.
+    -   Redirects to appropriate frontend URLs based on the `uiAction` parameter.
 -   **`GET /api/pipedrive-data`**: Fetches details for a specific Pipedrive deal, including associated person, organization, and products.
     -   Query Parameters:
         -   `dealId`: The ID of the Pipedrive deal.
@@ -115,3 +116,15 @@ The application exposes the following REST API endpoints:
         4.  Creates a draft quote in Xero.
         5.  Updates the Pipedrive deal with the Xero quote number (if `PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY` is configured).
     -   Responds with a JSON object containing the created quote details and status.
+-   **`POST /api/pipedrive/get-quotation-data`**: Retrieves quotation data for updating from both Pipedrive and Xero.
+    -   **Authentication**: Requires both Pipedrive and Xero authentication.
+    -   Request Body (JSON):
+        -   `companyId`: The Pipedrive company ID.
+        -   `dealId`: The ID of the Pipedrive deal containing quotation information.
+    -   Functionality:
+        1.  Fetches deal details from Pipedrive including custom fields.
+        2.  Extracts quotation number from configured custom field.
+        3.  Retrieves person, organization, and product details associated with the deal.
+        4.  Fetches existing Xero quotation by number for comparison.
+        5.  Provides comprehensive comparison data for quotation updates.
+    -   Responds with a JSON object containing deal, quotation, person, organization, product details, Xero quotation data, and comparison metadata.

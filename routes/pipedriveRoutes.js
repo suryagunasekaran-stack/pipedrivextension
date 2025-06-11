@@ -9,13 +9,14 @@
  * - GET /pipedrive-action - Handle Pipedrive app extension actions (requires auth)
  * - GET /api/pipedrive-data - Retrieve Pipedrive data for frontend (requires auth)
  * - POST /api/pipedrive/create-project - Create project from Pipedrive deal (requires auth)
+ * - POST /api/pipedrive/get-quotation-data - Get quotation data for updating (requires both Pipedrive and Xero auth)
  * 
  * @module routes/pipedriveRoutes
  */
 
 import express from 'express';
-import { getPipedriveData, createProject, handlePipedriveAction } from '../controllers/pipedriveController.js';
-import { requirePipedriveAuth } from '../middleware/authMiddleware.js';
+import { getPipedriveData, createProject, handlePipedriveAction, getQuotationData } from '../controllers/pipedriveController.js';
+import { requirePipedriveAuth, requireBothPipedriveAndXero } from '../middleware/authMiddleware.js';
 import { logRoute } from '../middleware/routeLogger.js';
 
 const router = express.Router();
@@ -39,6 +40,13 @@ router.post('/api/pipedrive/create-project',
     logRoute('Create Project from Deal'), 
     requirePipedriveAuth, 
     createProject
+);
+
+// Route to get quotation data for updating - requires both Pipedrive and Xero auth
+router.post('/api/pipedrive/get-quotation-data', 
+    logRoute('Get Quotation Data for Update'), 
+    requireBothPipedriveAndXero, 
+    getQuotationData
 );
 
 export default router;

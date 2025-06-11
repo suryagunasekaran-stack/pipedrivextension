@@ -1182,7 +1182,7 @@ export const createPartialInvoiceFromQuote = async (req, res) => {
                     ...(originalItem.Tracking && { Tracking: originalItem.Tracking })
                 };
             }),
-            Status: 'DRAFT',
+            Status: 'SENT',
             Reference: `Partial Invoice from Quote: ${quoteNumber}`,
             ...(xeroQuote.CurrencyCode && { CurrencyCode: xeroQuote.CurrencyCode })
         };

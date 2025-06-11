@@ -179,32 +179,103 @@ export const createQuote = async (accessToken, tenantId, quotePayload, idempoten
     headers['Idempotency-Key'] = idempotencyKey;
   }
 
+  // First create the quote as DRAFT (Xero's default behavior)
   const finalQuotePayload = {
     ...quotePayload,
-    ...(pipedriveDealReference && { Reference: pipedriveDealReference }),
-    Status: 'SENT'  // Always create quotes in SENT status
+    ...(pipedriveDealReference && { Reference: pipedriveDealReference })
+    // Remove Status: 'SENT' - let Xero create as DRAFT first
   };
 
   try {
+    // Step 1: Create quote as DRAFT
+    logger.info('Creating Xero quote as DRAFT', {
+      tenantId: tenantId.substring(0, 8) + '...',
+      hasIdempotencyKey: !!idempotencyKey
+    });
+
     const response = await axios.put(
       `https://api.xero.com/api.xro/2.0/Quotes`,
       { Quotes: [finalQuotePayload] },
       { headers }
     );
-    return response.data.Quotes[0];
+
+    const createdQuote = response.data.Quotes[0];
+    
+    if (!createdQuote || !createdQuote.QuoteID) {
+      throw new Error('Failed to create quote - no quote ID returned');
+    }
+
+    logger.info('Quote created as DRAFT, now updating to SENT', {
+      quoteId: createdQuote.QuoteID,
+      quoteNumber: createdQuote.QuoteNumber,
+      currentStatus: createdQuote.Status
+    });
+
+    // Step 2: Update quote status to SENT
+    const updatePayload = {
+      Quotes: [{
+        QuoteNumber: createdQuote.QuoteNumber,
+        Status: "SENT",
+        Contact: {
+          ContactID: createdQuote.Contact.ContactID
+        },
+        Date: createdQuote.Date
+      }]
+    };
+
+    try {
+      const updateResponse = await axios.post(
+        `https://api.xero.com/api.xro/2.0/Quotes/${createdQuote.QuoteID}`,
+        updatePayload,
+        { headers }
+      );
+
+      const updatedQuote = updateResponse.data.Quotes[0];
+      
+      logger.info('Quote status updated to SENT', {
+        quoteId: updatedQuote.QuoteID,
+        quoteNumber: updatedQuote.QuoteNumber,
+        finalStatus: updatedQuote.Status
+      });
+
+      return updatedQuote;
+    } catch (updateError) {
+      logger.error('Failed to update quote to SENT status, returning DRAFT quote', {
+        quoteId: createdQuote.QuoteID,
+        quoteNumber: createdQuote.QuoteNumber,
+        updateError: updateError.response ? updateError.response.data : updateError.message,
+        status: updateError.response?.status
+      });
+      
+      // If update fails, return the original DRAFT quote rather than crashing
+      logger.warn('Returning quote in DRAFT status due to update failure');
+      return createdQuote;
+    }
   } catch (error) {
     logger.error('Error creating Xero quote', {
       error: error.response ? error.response.data : error.message,
-      status: error.response?.status
+      status: error.response?.status,
+      url: error.config?.url,
+      method: error.config?.method,
+      payload: error.config?.data
     });
+    
     if (error.response && error.response.data && error.response.data.Elements) {
-        throw {
-            message: "Xero API validation error while creating quote.",
-            details: error.response.data.Elements,
-            status: error.response.status
-        };
+        const validationErrors = error.response.data.Elements[0]?.ValidationErrors || [];
+        const errorMessage = validationErrors.length > 0 
+          ? validationErrors.map(v => v.Message).join(', ')
+          : 'Quote validation failed';
+        
+        throw new Error(`Xero API validation error while creating quote: ${errorMessage}`);
+    } else if (error.response?.status === 400) {
+        throw new Error(`Xero API validation error (400): ${JSON.stringify(error.response.data)}`);
+    } else if (error.response?.status === 401) {
+        throw new Error('Xero authentication failed. Please check your access token.');
+    } else if (error.response?.status === 403) {
+        throw new Error('Access denied. Please check your Xero permissions.');
     }
-    throw error;
+    
+    throw new Error(`Failed to create Xero quote: ${error.message}`);
   }
 };
 
@@ -314,6 +385,7 @@ export const acceptXeroQuote = async (accessToken, tenantId, quoteId) => {
     // Prepare simplified acceptance payload as specified
     const acceptancePayload = {
       Quotes: [{
+        QuoteNumber: currentQuote.QuoteNumber,
         Status: "ACCEPTED",
         Contact: {
           ContactID: currentQuote.Contact.ContactID

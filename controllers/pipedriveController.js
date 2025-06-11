@@ -66,6 +66,8 @@ export const handlePipedriveAction = async (req, res) => {
 
     if (uiAction === 'createProject') {
         frontendRedirectUrl = `${baseFrontendUrl}/create-project-page`;
+    } else if (uiAction === 'updateQuotation') {
+        frontendRedirectUrl = `${baseFrontendUrl}/update-quotation-page`;
     } else {
         frontendRedirectUrl = `${baseFrontendUrl}/pipedrive-data-view`;
     }
@@ -335,5 +337,274 @@ export const getPipedriveData = async (req, res) => {
     } catch (error) {
         // Error will be handled by the error middleware with proper logging
         throw new Error(`Failed to fetch Pipedrive data: ${error.message}`);
+    }
+};
+
+/**
+ * Gets quotation data for updating by fetching deal details, existing quotation information,
+ * and Xero quotation data for comparison. Extracts quotation number from custom fields and 
+ * provides comprehensive data needed for frontend comparison and updates.
+ * Uses both Pipedrive and Xero authentication middleware.
+ * 
+ * @param {Object} req - Express request object with body containing dealId and companyId
+ * @param {Object} res - Express response object
+ * @returns {Promise<void>} Returns JSON with deal details, quotation info, Xero data, and comparison metadata
+ * @throws {Error} Returns 400 for missing params, 404 for deal not found, 500 for API errors
+ */
+export const getQuotationData = async (req, res) => {
+    const { dealId, companyId } = req.body;
+
+    logProcessing(req, 'Validating required parameters for quotation data', { 
+        dealId: !!dealId, 
+        companyId: !!companyId 
+    });
+
+    if (!dealId || !companyId) {
+        logWarning(req, 'Missing required parameters', { dealId: !!dealId, companyId: !!companyId });
+        return res.status(400).json({ error: 'Deal ID and Company ID are required in the request body.' });
+    }
+
+    // Authentication handled by middleware - tokens available in req.pipedriveAuth and req.xeroAuth
+    const { accessToken, apiDomain } = req.pipedriveAuth;
+    const { accessToken: xeroAccessToken, tenantId: xeroTenantId } = req.xeroAuth;
+    
+    logProcessing(req, 'Retrieved authentication tokens for quotation data', { 
+        hasAccessToken: !!accessToken,
+        hasApiDomain: !!apiDomain,
+        hasXeroAccessToken: !!xeroAccessToken,
+        hasXeroTenantId: !!xeroTenantId
+    });
+    
+    const xeroQuoteCustomFieldKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY;
+    const vesselNameKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_VESSEL_NAME;
+    const salesInChargeKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_SALES_IN_CHARGE;
+    const locationKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_LOCATION;
+    const departmentKey = process.env.PIPEDRIVE_QUOTE_CUSTOM_DEPARTMENT;
+
+    logProcessing(req, 'Environment configuration loaded for quotation', {
+        hasXeroQuoteKey: !!xeroQuoteCustomFieldKey,
+        hasVesselNameKey: !!vesselNameKey,
+        hasSalesInChargeKey: !!salesInChargeKey,
+        hasLocationKey: !!locationKey,
+        hasDepartmentKey: !!departmentKey
+    });
+
+    if (!xeroQuoteCustomFieldKey) {
+        logWarning(req, 'PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY not configured');
+    }
+
+    try {
+        logProcessing(req, 'Fetching deal details for quotation update', { dealId, apiDomain });
+        
+        const dealDetails = await pipedriveApiService.getDealDetails(apiDomain, accessToken, dealId);
+
+        if (!dealDetails) {
+            logWarning(req, 'Deal not found for quotation update', { dealId });
+            return res.status(404).json({ error: `Deal with ID ${dealId} not found.` });
+        }
+
+        logProcessing(req, 'Deal details retrieved for quotation', {
+            dealTitle: dealDetails.title,
+            dealValue: dealDetails.value,
+            hasPersonId: !!(dealDetails.person_id && dealDetails.person_id.value),
+            hasOrgId: !!(dealDetails.org_id && dealDetails.org_id.value)
+        });
+
+        const xeroQuoteNumber = xeroQuoteCustomFieldKey ? (dealDetails[xeroQuoteCustomFieldKey] || null) : null;
+
+        const frontendDealObject = { ...dealDetails };
+
+        // Add custom fields to the deal object
+        const customFieldsAdded = {};
+        
+        if (vesselNameKey && dealDetails[vesselNameKey]) {
+            frontendDealObject.vesselName = dealDetails[vesselNameKey];
+            customFieldsAdded.vesselName = dealDetails[vesselNameKey];
+        }
+        
+        if (salesInChargeKey && dealDetails[salesInChargeKey]) {
+            frontendDealObject.salesInCharge = dealDetails[salesInChargeKey];
+            customFieldsAdded.salesInCharge = dealDetails[salesInChargeKey];
+        }
+        
+        if (locationKey && dealDetails[locationKey]) {
+            frontendDealObject.location = dealDetails[locationKey];
+            customFieldsAdded.location = dealDetails[locationKey];
+        }
+        
+        if (departmentKey && dealDetails[departmentKey]) {
+            frontendDealObject.department = dealDetails[departmentKey];
+            customFieldsAdded.department = dealDetails[departmentKey];
+        }
+
+        // Add quotation-specific information
+        if (xeroQuoteNumber) {
+            frontendDealObject.quotationNumber = xeroQuoteNumber;
+            customFieldsAdded.quotationNumber = xeroQuoteNumber;
+        }
+
+        logProcessing(req, 'Custom fields added to deal object for quotation', customFieldsAdded);
+
+        // Fetch additional data for quotation context
+        let personDetails = null;
+        let organizationDetails = null;
+        let dealProducts = [];
+
+        // Fetch person details if available
+        if (dealDetails.person_id && dealDetails.person_id.value) {
+            try {
+                logProcessing(req, 'Fetching person details for quotation', { personId: dealDetails.person_id.value });
+                personDetails = await pipedriveApiService.getPersonDetails(apiDomain, accessToken, dealDetails.person_id.value);
+            } catch (personError) {
+                logWarning(req, 'Could not fetch person details for quotation', { 
+                    personId: dealDetails.person_id.value, 
+                    error: personError.message 
+                });
+            }
+        }
+
+        // Fetch organization details if available
+        if (dealDetails.org_id && dealDetails.org_id.value) {
+            try {
+                logProcessing(req, 'Fetching organization details for quotation', { orgId: dealDetails.org_id.value });
+                organizationDetails = await pipedriveApiService.getOrganizationDetails(apiDomain, accessToken, dealDetails.org_id.value);
+            } catch (orgError) {
+                logWarning(req, 'Could not fetch organization details for quotation', { 
+                    orgId: dealDetails.org_id.value, 
+                    error: orgError.message 
+                });
+            }
+        }
+
+        // Fetch deal products for quotation line items
+        try {
+            logProcessing(req, 'Fetching deal products for quotation', { dealId });
+            dealProducts = await pipedriveApiService.getDealProducts(apiDomain, accessToken, dealId);
+            logProcessing(req, 'Deal products retrieved for quotation', { productsCount: dealProducts.length });
+        } catch (productsError) {
+            logWarning(req, 'Could not fetch deal products for quotation', { 
+                dealId, 
+                error: productsError.message 
+            });
+        }
+
+        // Fetch existing Xero quotation if quotation number exists
+        let xeroQuotation = null;
+        let comparisonData = null;
+        
+        if (xeroQuoteNumber) {
+            try {
+                logProcessing(req, 'Fetching existing Xero quotation', { quotationNumber: xeroQuoteNumber });
+                
+                // Import xeroApiService to fetch the quotation
+                const xeroApiService = await import('../services/xeroApiService.js');
+                const xeroQuote = await xeroApiService.findXeroQuoteByNumber(xeroAccessToken, xeroTenantId, xeroQuoteNumber);
+                
+                if (xeroQuote) {
+                    xeroQuotation = {
+                        quoteId: xeroQuote.QuoteID,
+                        quoteNumber: xeroQuote.QuoteNumber,
+                        status: xeroQuote.Status,
+                        lineItems: xeroQuote.LineItems || [],
+                        subTotal: xeroQuote.SubTotal || 0,
+                        totalTax: xeroQuote.TotalTax || 0,
+                        total: xeroQuote.Total || 0,
+                        contact: xeroQuote.Contact || null,
+                        date: xeroQuote.Date || null
+                    };
+                    
+                    // Prepare comparison data
+                    comparisonData = {
+                        canUpdate: xeroQuote.Status === 'DRAFT',
+                        pipedriveProductCount: dealProducts.length,
+                        xeroLineItemCount: xeroQuote.LineItems ? xeroQuote.LineItems.length : 0,
+                        statusWarning: xeroQuote.Status !== 'DRAFT' ? `Quote is in ${xeroQuote.Status} status and cannot be updated` : null
+                    };
+                    
+                    logProcessing(req, 'Xero quotation retrieved successfully', {
+                        quoteId: xeroQuote.QuoteID,
+                        status: xeroQuote.Status,
+                        lineItemsCount: xeroQuote.LineItems ? xeroQuote.LineItems.length : 0,
+                        canUpdate: comparisonData.canUpdate
+                    });
+                } else {
+                    logWarning(req, 'Xero quotation not found', { quotationNumber: xeroQuoteNumber });
+                    comparisonData = {
+                        canUpdate: false,
+                        pipedriveProductCount: dealProducts.length,
+                        xeroLineItemCount: 0,
+                        statusWarning: `Quotation ${xeroQuoteNumber} not found in Xero`
+                    };
+                }
+            } catch (xeroError) {
+                logWarning(req, 'Error fetching Xero quotation', {
+                    quotationNumber: xeroQuoteNumber,
+                    error: xeroError.message
+                });
+                comparisonData = {
+                    canUpdate: false,
+                    pipedriveProductCount: dealProducts.length,
+                    xeroLineItemCount: 0,
+                    statusWarning: `Error fetching quotation from Xero: ${xeroError.message}`
+                };
+            }
+        } else {
+            comparisonData = {
+                canUpdate: false,
+                pipedriveProductCount: dealProducts.length,
+                xeroLineItemCount: 0,
+                statusWarning: 'No quotation number found in deal'
+            };
+        }
+
+        const responseData = {
+            deal: frontendDealObject,
+            quotationNumber: xeroQuoteNumber,
+            person: personDetails,
+            organization: organizationDetails,
+            products: dealProducts,
+            xeroQuotation: xeroQuotation,
+            comparison: comparisonData,
+            metadata: {
+                dealId: dealId,
+                companyId: companyId,
+                customFieldsExtracted: Object.keys(customFieldsAdded),
+                hasQuotationNumber: !!xeroQuoteNumber,
+                hasXeroQuotation: !!xeroQuotation,
+                productsCount: dealProducts.length,
+                canUpdate: comparisonData ? comparisonData.canUpdate : false
+            }
+        };
+
+        logSuccess(req, 'Quotation data prepared successfully', {
+            dealId,
+            dealTitle: dealDetails.title,
+            hasQuotationNumber: !!xeroQuoteNumber,
+            quotationNumber: xeroQuoteNumber,
+            hasPersonDetails: !!personDetails,
+            hasOrgDetails: !!organizationDetails,
+            productsCount: dealProducts.length,
+            hasXeroQuotation: !!xeroQuotation,
+            xeroQuotationStatus: xeroQuotation ? xeroQuotation.status : null,
+            canUpdate: comparisonData ? comparisonData.canUpdate : false
+        });
+
+        res.json(responseData);
+
+    } catch (error) {
+        logWarning(req, 'Error fetching quotation data', {
+            dealId,
+            error: error.message,
+            stack: error.stack
+        });
+
+        if (error.response && error.response.status === 404) {
+            return res.status(404).json({ error: `Deal with ID ${dealId} not found in Pipedrive.` });
+        }
+
+        res.status(500).json({ 
+            error: 'Failed to fetch quotation data from Pipedrive',
+            details: error.message
+        });
     }
 };
