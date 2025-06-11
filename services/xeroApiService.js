@@ -181,7 +181,8 @@ export const createQuote = async (accessToken, tenantId, quotePayload, idempoten
 
   const finalQuotePayload = {
     ...quotePayload,
-    ...(pipedriveDealReference && { Reference: pipedriveDealReference })
+    ...(pipedriveDealReference && { Reference: pipedriveDealReference }),
+    Status: 'SENT'  // Always create quotes in SENT status
   };
 
   try {
@@ -208,8 +209,67 @@ export const createQuote = async (accessToken, tenantId, quotePayload, idempoten
 };
 
 /**
- * Accepts a Xero quote by following the proper status workflow
- * DRAFT -> SENT -> ACCEPTED
+ * Gets a single Xero quote by ID
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {string} quoteId - Xero quote ID
+ * @returns {Promise<Object|null>} Quote object or null if not found
+ * @throws {Error} When quote retrieval fails
+ */
+export const getXeroQuoteById = async (accessToken, tenantId, quoteId) => {
+  try {
+    logger.info('Retrieving Xero quote by ID', {
+      quoteId,
+      tenantId: tenantId.substring(0, 8) + '...'
+    });
+
+    const url = `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`;
+    
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      'Xero-Tenant-Id': tenantId,
+      Accept: 'application/json',
+    };
+
+    const response = await axios.get(url, { headers });
+    
+    logger.info('Xero quote retrieval response received', {
+      quoteId,
+      status: response.status,
+      hasData: !!response.data,
+      quotesInResponse: response.data?.Quotes?.length || 0
+    });
+    
+    const quote = response.data?.Quotes?.[0] || null;
+    
+    if (quote) {
+      logger.info('Quote retrieved successfully', {
+        QuoteID: quote.QuoteID,
+        QuoteNumber: quote.QuoteNumber,
+        Status: quote.Status,
+        ContactName: quote.Contact?.Name,
+        Total: quote.Total
+      });
+    } else {
+      logger.warn('Quote not found', { quoteId });
+    }
+
+    return quote;
+  } catch (error) {
+    logger.error('Error retrieving Xero quote by ID', {
+      quoteId,
+      error: error.response ? error.response.data : error.message,
+      status: error.response?.status,
+      url: error.config?.url
+    });
+    throw error;
+  }
+};
+
+/**
+ * Accepts a Xero quote by changing status from SENT to ACCEPTED using simplified approach
+ * Gets the quote by ID from Pipedrive custom field, then updates with minimal payload
  * 
  * @param {string} accessToken - Xero access token
  * @param {string} tenantId - Xero tenant ID
@@ -218,142 +278,108 @@ export const createQuote = async (accessToken, tenantId, quotePayload, idempoten
  */
 export const acceptXeroQuote = async (accessToken, tenantId, quoteId) => {
   try {
-    logger.info('Starting Xero quote acceptance process', {
+    logger.info('Starting Xero quote acceptance process with direct ID lookup', {
       quoteId,
-      operation: 'accept_quote'
+      operation: 'accept_quote_by_id'
     });
 
-    // Get current quote to check status and get minimal required fields
-    const getCurrentQuoteUrl = `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`;
-    const currentQuoteResponse = await axios.get(getCurrentQuoteUrl, {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Xero-tenant-id': tenantId,
-        'Accept': 'application/json'
-      }
-    });
-
-    const currentQuote = currentQuoteResponse.data?.Quotes?.[0];
+    // Get current quote details using the new function
+    const currentQuote = await getXeroQuoteById(accessToken, tenantId, quoteId);
+    
     if (!currentQuote) {
-      throw new Error('Quote not found');
+      throw new Error(`Quote with ID ${quoteId} not found in Xero`);
     }
 
-    logger.info('Current quote status', {
+    logger.info('Current quote status retrieved', {
       quoteId,
       currentStatus: currentQuote.Status,
-      quoteNumber: currentQuote.QuoteNumber
+      quoteNumber: currentQuote.QuoteNumber,
+      contactId: currentQuote.Contact?.ContactID
     });
 
-    // If already accepted, return as is
+    // If already accepted, log warning but return the quote
     if (currentQuote.Status === 'ACCEPTED') {
-      logger.info('Quote is already accepted', { quoteId });
+      logger.warn('Quote is already accepted, skipping update', { 
+        quoteId,
+        quoteNumber: currentQuote.QuoteNumber 
+      });
       return currentQuote;
     }
 
-    // Prepare the update payload using the full current quote data
-    // This helps prevent Xero from creating a new quote version (and number)
-    // when only the status is being changed.
-    const createUpdatePayload = (status) => {
-      const payload = { ...currentQuote }; // Start with all current quote data
-      delete payload.UpdatedDateUTC; // Remove fields that might cause issues or are read-only
-      delete payload.Summary; 
-      // Ensure LineItems are in the correct format if they exist
-      if (payload.LineItems && Array.isArray(payload.LineItems)) {
-        payload.LineItems = payload.LineItems.map(item => {
-          const { LineItemID, LineAmount, TaxAmount, TaxType, AccountCode, Tracking, Quantity, UnitAmount, ItemCode, Description, DiscountRate, ...restOfItem } = item;
-          // Return a minimal but valid line item, or expand as necessary based on API requirements
-          // It's crucial that LineAmount, TaxAmount etc. are correctly calculated if not directly copied
-          // For status updates, preserving existing validated line items is key.
-          return { 
-            Description: Description, // Essential
-            Quantity: Quantity, // Essential
-            UnitAmount: UnitAmount, // Essential
-            AccountCode: AccountCode, // Often required
-            TaxType: TaxType, // Often required
-            LineAmount: LineAmount, // If provided, Xero might use it, otherwise it calculates
-            ItemCode: ItemCode, // Optional
-            DiscountRate: DiscountRate, // Optional
-            // Potentially include LineItemID IF the API uses it to match/update existing lines
-            // LineItemID: LineItemID 
-          };
-        });
-      } else {
-        // If no line items on currentQuote, ensure it's an empty array or handle as per API spec
-        payload.LineItems = [];
-      }
-      payload.Status = status; // Set the new status
-      return { Quotes: [payload] };
-    };
-    
-    const updateUrl = `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`; // Using quoteId for specific quote update
-    // const updateUrl = `https://api.xero.com/api.xro/2.0/Quotes`; // Using general endpoint for creating/updating quotes
+    // Check if quote can be accepted
+    if (currentQuote.Status !== 'SENT') {
+      throw new Error(`Cannot accept quote ${quoteId}. Quote must be in SENT status but is currently ${currentQuote.Status}`);
+    }
 
+    // Prepare simplified acceptance payload as specified
+    const acceptancePayload = {
+      Quotes: [{
+        Status: "ACCEPTED",
+        Contact: {
+          ContactID: currentQuote.Contact.ContactID
+        },
+        Date: new Date().toISOString().split('T')[0] // Current date in YYYY-MM-DD format
+      }]
+    };
+
+    logger.info('Sending quote acceptance request', {
+      quoteId,
+      contactId: currentQuote.Contact.ContactID,
+      newStatus: 'ACCEPTED'
+    });
+
+    // Send acceptance request to Xero
+    const updateUrl = `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`;
     const headers = {
       'Authorization': `Bearer ${accessToken}`,
-      'Xero-tenant-id': tenantId,
+      'Xero-Tenant-Id': tenantId,
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     };
 
-    let finalQuote = currentQuote;
-
-    // Step 1: If DRAFT, change to SENT first
-    if (currentQuote.Status === 'DRAFT') {
-      logger.info('Changing quote status from DRAFT to SENT', { quoteId });
-      
-      const sentPayload = createUpdatePayload('SENT');
-
-      const sentResponse = await axios.post(updateUrl, sentPayload, { headers });
-      
-      if (!sentResponse.data?.Quotes?.[0]) {
-        throw new Error('Failed to update quote to SENT status');
-      }
-      
-      finalQuote = sentResponse.data.Quotes[0];
-      logger.info('Quote status updated to SENT', {
-        quoteId,
-        newStatus: finalQuote.Status,
-        quoteNumber: finalQuote.QuoteNumber
-      });
-    }
-
-    // Step 2: Change to ACCEPTED
-    logger.info('Changing quote status to ACCEPTED', { quoteId });
+    const response = await axios.post(updateUrl, acceptancePayload, { headers });
     
-    const acceptedPayload = createUpdatePayload('ACCEPTED');
-
-    const acceptedResponse = await axios.post(updateUrl, acceptedPayload, { headers });
-    
-    if (!acceptedResponse.data?.Quotes?.[0]) {
-      throw new Error('Failed to update quote to ACCEPTED status');
+    if (!response.data?.Quotes?.[0]) {
+      throw new Error('Failed to update quote to ACCEPTED status - invalid response from Xero');
     }
     
-    finalQuote = acceptedResponse.data.Quotes[0];
+    const acceptedQuote = response.data.Quotes[0];
     
-    logger.info('Quote acceptance completed', {
+    logger.info('Quote acceptance completed successfully', {
       quoteId,
-      finalStatus: finalQuote.Status,
-      quoteNumber: finalQuote.QuoteNumber
+      finalStatus: acceptedQuote.Status,
+      quoteNumber: acceptedQuote.QuoteNumber
     });
 
-    return finalQuote;
+    return acceptedQuote;
 
   } catch (error) {
     logger.error('Error accepting Xero quote', {
       quoteId,
       error: error.message,
       response: error.response?.data,
-      status: error.response?.status
+      status: error.response?.status,
+      operation: 'accept_quote_by_id'
     });
     
-    if (error.response?.data?.Elements) {
-      throw {
-        message: `Xero API validation error while accepting quote ${quoteId}.`,
-        details: error.response.data.Elements,
-        status: error.response.status
-      };
+    // Enhanced error messages
+    if (error.response?.status === 404) {
+      throw new Error(`Quote ${quoteId} not found in Xero. Please verify the quote ID exists.`);
+    } else if (error.response?.status === 400 && error.response?.data?.Elements) {
+      const validationErrors = error.response.data.Elements[0]?.ValidationErrors || [];
+      const errorMessage = validationErrors.length > 0 
+        ? validationErrors.map(v => v.Message).join(', ')
+        : 'Quote validation failed';
+      throw new Error(`Xero API validation error while accepting quote ${quoteId}: ${errorMessage}`);
+    } else if (error.response?.status === 403) {
+      throw new Error(`Access denied when trying to accept quote ${quoteId}. Please check Xero permissions.`);
+    } else if (error.message.includes('not found')) {
+      throw error; // Re-throw our custom "not found" messages
+    } else if (error.message.includes('Cannot accept quote')) {
+      throw error; // Re-throw our custom status validation messages
     }
-    throw error;
+    
+    throw new Error(`Failed to accept Xero quote ${quoteId}: ${error.message}`);
   }
 };
 
@@ -613,8 +639,8 @@ export const createXeroTask = async (accessToken, tenantId, projectId, name) => 
       "currency": "USD",
       "value": 1.00
     },
-    "chargeType": "TIME",
-    "estimateMinutes": 60
+    "chargeType": "FIXED",
+    "estimateMinutes": 1
   };
 
   console.log("payload", taskPayload);
@@ -667,20 +693,33 @@ export const createXeroTask = async (accessToken, tenantId, projectId, name) => 
  */
 export const getXeroQuotes = async (accessToken, tenantId, options = {}) => {
   try {
-    logger.debug('Retrieving Xero quotes', {
+    logger.info('Retrieving Xero quotes', {
       tenantId,
       options
     });
 
     let url = 'https://api.xero.com/api.xro/2.0/Quotes';
+    const queryParams = [];
     
     // Add query parameters if provided
-    if (options.where) {
-      url += `?where=${encodeURIComponent(options.where)}`;
+    if (options.quoteNumber) {
+      queryParams.push(`QuoteNumber=${encodeURIComponent(options.quoteNumber)}`);
     }
     if (options.page) {
-      url += `${options.where ? '&' : '?'}page=${options.page}`;
+      queryParams.push(`page=${options.page}`);
     }
+    if (options.where) {
+      queryParams.push(`where=${encodeURIComponent(options.where)}`);
+    }
+    
+    if (queryParams.length > 0) {
+      url += `?${queryParams.join('&')}`;
+    }
+
+    logger.info('Making Xero API request', {
+      url,
+      tenantId: tenantId.substring(0, 8) + '...'
+    });
 
     const headers = {
       Authorization: `Bearer ${accessToken}`,
@@ -690,18 +729,29 @@ export const getXeroQuotes = async (accessToken, tenantId, options = {}) => {
 
     const response = await axios.get(url, { headers });
     
+    logger.info('Xero API response received', {
+      status: response.status,
+      hasData: !!response.data,
+      quotesInResponse: response.data?.Quotes?.length || 0
+    });
+    
     const quotes = response.data.Quotes || [];
     
-    logger.debug('Retrieved Xero quotes', {
+    logger.info('Retrieved Xero quotes', {
       quotesCount: quotes.length,
-      quotesFound: quotes.map(q => q.QuoteNumber)
+      quotesFound: quotes.map(q => ({
+        QuoteNumber: q.QuoteNumber,
+        Status: q.Status,
+        QuoteID: q.QuoteID
+      }))
     });
 
     return quotes;
   } catch (error) {
     logger.error('Error retrieving Xero quotes', {
       error: error.response ? error.response.data : error.message,
-      status: error.response?.status
+      status: error.response?.status,
+      url: error.config?.url
     });
     throw error;
   }
@@ -718,30 +768,37 @@ export const getXeroQuotes = async (accessToken, tenantId, options = {}) => {
  */
 export const findXeroQuoteByNumber = async (accessToken, tenantId, quoteNumber) => {
   try {
-    logger.debug('Finding Xero quote by number', {
+    logger.info('Finding Xero quote by number', {
       quoteNumber,
-      tenantId
+      tenantId: tenantId.substring(0, 8) + '...'
     });
 
+    // Use the correct Xero API query parameter format
     const quotes = await getXeroQuotes(accessToken, tenantId, {
-      where: `QuoteNumber="${quoteNumber}"`
+      quoteNumber: quoteNumber
     });
     
-    logger.debug('Quote search completed', {
+    logger.info('Quote search completed', {
       quoteNumber,
-      quotesFound: quotes.length
+      quotesFound: quotes.length,
+      allQuoteNumbers: quotes.map(q => q.QuoteNumber)
     });
 
     const foundQuote = quotes.find(quote => quote.QuoteNumber === quoteNumber);
     
     if (foundQuote) {
-      logger.debug('Quote found', {
+      logger.info('Quote found', {
         QuoteNumber: foundQuote.QuoteNumber,
         QuoteID: foundQuote.QuoteID,
-        Status: foundQuote.Status
+        Status: foundQuote.Status,
+        ContactName: foundQuote.Contact?.Name,
+        Total: foundQuote.Total
       });
     } else {
-      logger.debug('Quote not found', { quoteNumber });
+      logger.warn('Quote not found', { 
+        quoteNumber,
+        availableQuotes: quotes.map(q => q.QuoteNumber)
+      });
     }
 
     return foundQuote || null;

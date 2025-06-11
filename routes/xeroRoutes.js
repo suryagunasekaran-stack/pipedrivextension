@@ -8,7 +8,7 @@
  * Routes:
  * - GET /api/xero/status - Check Xero connection status
  * - POST /api/xero/create-quote - Create new quote in Xero
- * - PUT /api/xero/accept-quote/:quoteId - Accept existing Xero quote
+ * - POST /api/xero/accept-quote - Accept existing Xero quote
  * - POST /api/xero/create-project - Create project in Xero
  * - PUT /api/xero/update-quotation - Update quotation on Xero using Pipedrive deal data
  * 
@@ -35,10 +35,10 @@ router.post('/api/xero/create-quote',
     xeroController.createXeroQuote
 );
 
-// API to accept a Xero Quote (requires Xero auth)
-router.put('/api/xero/accept-quote/:quoteId', 
+// API to accept a Xero Quote (requires both Pipedrive and Xero auth)
+router.post('/api/xero/accept-quote', 
     logRoute('Accept Xero Quote'), 
-    requireXeroAuth, 
+    requireBothPipedriveAndXero, 
     xeroController.acceptXeroQuote
 );
 
@@ -47,12 +47,6 @@ router.post('/api/xero/create-project',
     logRoute('Create Xero Project'), 
     requireXeroAuth, 
     xeroController.createXeroProject
-);
-
-// Debug endpoint to test quote acceptance (no auth middleware for easier testing)
-router.post('/api/xero/debug-quote-acceptance', 
-    logRoute('Debug Quote Acceptance'), 
-    xeroController.debugQuoteAcceptance
 );
 
 // API to update quotation on Xero using Pipedrive deal data (requires both Pipedrive and Xero auth)

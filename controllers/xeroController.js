@@ -271,7 +271,7 @@ export const createXeroQuote = async (req, res) => {
             Contact: { ContactID: xeroContactID },
             Date: currentDate,
             LineItems: lineItems,
-            Status: "DRAFT"
+            Status: "SENT"
         };
         
         const idempotencyKey = uuidv4();
@@ -294,11 +294,22 @@ export const createXeroQuote = async (req, res) => {
             });
 
             try {
-                logProcessing(req, 'Updating Pipedrive deal with quote number', { 
-                    quoteNumber: createdQuote.QuoteNumber 
+                logProcessing(req, 'Updating Pipedrive deal with quote number and quote ID', { 
+                    quoteNumber: createdQuote.QuoteNumber,
+                    quoteId: createdQuote.QuoteID
                 });
                 
+                // Update deal with quote number
                 await pipedriveApiService.updateDealWithQuoteNumber(pdApiDomain, pdAccessToken, pipedriveDealId, createdQuote.QuoteNumber);
+                
+                // Update deal with Xero quote ID if configured
+                const quoteIdCustomFieldKey = process.env.PIPEDRIVE_QUOTE_ID;
+                if (quoteIdCustomFieldKey && createdQuote.QuoteID) {
+                    await pipedriveApiService.updateDealCustomField(pdApiDomain, pdAccessToken, pipedriveDealId, quoteIdCustomFieldKey, createdQuote.QuoteID);
+                    logProcessing(req, 'Deal updated with quote ID', { quoteId: createdQuote.QuoteID });
+                } else if (!quoteIdCustomFieldKey) {
+                    logWarning(req, 'PIPEDRIVE_QUOTE_ID not configured - skipping quote ID update');
+                }
                 
                 const responseData = { 
                     message: 'Xero quote created and Pipedrive deal updated successfully!', 
@@ -312,9 +323,10 @@ export const createXeroQuote = async (req, res) => {
                 res.status(201).json(responseData);
                 
             } catch (updateError) {
-                logWarning(req, 'Failed to update Pipedrive deal with quote number', {
+                logWarning(req, 'Failed to update Pipedrive deal with quote number or quote ID', {
                     error: updateError.message,
-                    quoteNumber: createdQuote.QuoteNumber
+                    quoteNumber: createdQuote.QuoteNumber,
+                    quoteId: createdQuote.QuoteID
                 });
                 
                 const responseData = {
@@ -344,79 +356,186 @@ export const createXeroQuote = async (req, res) => {
 };
 
 /**
- * Accepts a Xero quote by updating its status to ACCEPTED.
- * Requires valid Xero authentication tokens for the specified Pipedrive company.
+ * Accepts a Xero quote by retrieving the quote ID from Pipedrive custom field.
+ * Uses the simplified quote acceptance approach with direct ID lookup.
  * 
- * @param {Object} req - Express request object with body containing pipedriveCompanyId and params containing quoteId
+ * @param {Object} req - Express request object with body containing dealId and pipedriveCompanyId
  * @param {Object} res - Express response object
  * @returns {Promise<void>} Returns JSON with acceptance confirmation or error response
- * @throws {Error} Returns 400 for missing params, 401 for auth issues, 500 for API errors
+ * @throws {Error} Returns 400 for missing params, 404 for quote not found, 500 for API errors
  */
 export const acceptXeroQuote = async (req, res) => {
-    const { pipedriveCompanyId } = req.body;
-    const { quoteId } = req.params;
+    const { dealId, pipedriveCompanyId } = req.body;
 
-    if (!pipedriveCompanyId) {
-        logger.warn('Missing Pipedrive Company ID in quote acceptance request');
-        return res.status(400).json({ error: 'Pipedrive Company ID is required in the request body.' });
-    }
-    if (!quoteId) {
-        logger.warn('Missing Xero Quote ID in quote acceptance request');
-        return res.status(400).json({ error: 'Xero Quote ID is required in the URL parameters.' });
+    logProcessing(req, 'Validating input parameters for quote acceptance', { 
+        dealId: !!dealId, 
+        pipedriveCompanyId: !!pipedriveCompanyId 
+    });
+
+    if (!dealId || !pipedriveCompanyId) {
+        logWarning(req, 'Missing required parameters for quote acceptance');
+        return res.status(400).json({ 
+            error: 'Deal ID and Pipedrive Company ID are required.',
+            example: {
+                dealId: "12345",
+                pipedriveCompanyId: "67890"
+            }
+        });
     }
 
     try {
+        // Use auth info provided by middleware
+        const pdApiDomain = req.pipedriveAuth.apiDomain;
+        const pdAccessToken = req.pipedriveAuth.accessToken;
+
+        logProcessing(req, 'Pipedrive authentication retrieved', {
+            hasApiDomain: !!pdApiDomain,
+            hasAccessToken: !!pdAccessToken
+        });
+
         // Xero auth is guaranteed by middleware
         const xeroAccessToken = req.xeroAuth.accessToken;
         const xeroTenantId = req.xeroAuth.tenantId;
 
-        logger.info('Attempting to accept Xero quote using simplified workflow', {
-            quoteId,
-            companyId: pipedriveCompanyId,
-            tenantId: xeroTenantId
+        logProcessing(req, 'Xero authentication verified', {
+            hasAccessToken: !!xeroAccessToken,
+            hasTenantId: !!xeroTenantId
         });
 
-        const acceptanceResult = await xeroApiService.acceptXeroQuote(xeroAccessToken, xeroTenantId, quoteId);
+        // Fetch deal details to get the Xero quote ID from custom field
+        logProcessing(req, 'Fetching Pipedrive deal details', { dealId });
+        const dealDetails = await pipedriveApiService.getDealDetails(pdApiDomain, pdAccessToken, dealId);
+        
+        if (!dealDetails) {
+            logWarning(req, 'Deal not found', { dealId });
+            return res.status(404).json({ 
+                error: `Deal with ID ${dealId} not found.` 
+            });
+        }
+
+        // Get the Xero quote ID from the Pipedrive custom field
+        const quoteIdCustomFieldKey = process.env.PIPEDRIVE_QUOTE_ID;
+        
+        if (!quoteIdCustomFieldKey) {
+            logWarning(req, 'PIPEDRIVE_QUOTE_ID environment variable not configured');
+            return res.status(500).json({ 
+                error: 'Quote ID custom field not configured. Please contact system administrator.',
+                details: 'PIPEDRIVE_QUOTE_ID environment variable is required'
+            });
+        }
+
+        const xeroQuoteId = dealDetails[quoteIdCustomFieldKey];
+
+        logProcessing(req, 'Deal details and quote ID retrieved', {
+            dealTitle: dealDetails.title,
+            hasQuoteId: !!xeroQuoteId,
+            quoteId: xeroQuoteId,
+            customFieldKey: quoteIdCustomFieldKey
+        });
+
+        if (!xeroQuoteId) {
+            logWarning(req, 'Deal has no associated Xero quote ID', { 
+                dealId, 
+                customFieldKey: quoteIdCustomFieldKey 
+            });
+            return res.status(400).json({ 
+                error: 'Deal does not have an associated Xero quote ID. Please create a quote first.',
+                details: `Custom field '${quoteIdCustomFieldKey}' is empty or not set`
+            });
+        }
+
+        // Accept the quote using the new simplified approach
+        logProcessing(req, 'Attempting to accept Xero quote', { 
+            quoteId: xeroQuoteId,
+            dealId 
+        });
+
+        const acceptanceResult = await xeroApiService.acceptXeroQuote(xeroAccessToken, xeroTenantId, xeroQuoteId);
 
         if (acceptanceResult) {
-            logger.info('Quote acceptance successful', {
-                quoteId,
+            const responseData = {
+                success: true,
+                message: `Quote ${xeroQuoteId} successfully accepted in Xero.`,
+                data: {
+                    quoteId: xeroQuoteId,
+                    quoteNumber: acceptanceResult.QuoteNumber,
+                    status: acceptanceResult.Status,
+                    dealId: dealId,
+                    contactName: acceptanceResult.Contact?.Name,
+                    total: acceptanceResult.Total
+                }
+            };
+
+            logSuccess(req, 'Quote acceptance completed successfully', {
+                quoteId: xeroQuoteId,
+                quoteNumber: acceptanceResult.QuoteNumber,
                 status: acceptanceResult.Status,
-                quoteNumber: acceptanceResult.QuoteNumber
+                dealId
             });
-            res.status(200).json({ 
-                message: `Quote ${quoteId} successfully accepted in Xero.`, 
-                details: acceptanceResult 
-            });
+
+            res.status(200).json(responseData);
         } else {
-            logger.error('Quote acceptance failed - no result returned', {
-                quoteId,
-                companyId: pipedriveCompanyId
+            logWarning(req, 'Quote acceptance failed - no result returned', {
+                quoteId: xeroQuoteId,
+                dealId
             });
-            res.status(500).json({ 
-                error: `Failed to accept quote ${quoteId} in Xero.`, 
+            return res.status(500).json({ 
+                error: `Failed to accept quote ${xeroQuoteId} in Xero.`, 
                 details: 'No result returned from Xero API'
             });
         }
 
     } catch (error) {
-        logger.error(error, {
-            quoteId,
-            companyId: pipedriveCompanyId,
-            action: 'accept_quote'
-        }, 'Error accepting Xero quote');
+        logWarning(req, 'Error accepting Xero quote', {
+            dealId,
+            pipedriveCompanyId,
+            error: error.message,
+            stack: error.stack
+        });
 
-        if (error.response && error.response.data) {
-            return res.status(error.response.status || 500).json({ 
-                error: 'Failed to accept Xero quote.', 
-                xeroError: error.response.data,
+        // Return appropriate error response based on error type
+        if (error.message.includes('not found in Xero')) {
+            return res.status(404).json({ 
+                error: 'Quote not found in Xero',
+                details: error.message
+            });
+        } else if (error.message.includes('Cannot accept quote') || error.message.includes('must be in SENT status')) {
+            return res.status(409).json({ 
+                error: 'Quote status conflict',
+                details: error.message
+            });
+        } else if (error.message.includes('Access denied') || error.message.includes('permissions')) {
+            return res.status(403).json({ 
+                error: 'Access denied',
+                details: error.message
+            });
+        } else if (error.message.includes('validation')) {
+            return res.status(400).json({ 
+                error: 'Validation error',
+                details: error.message
+            });
+        } else if (error.response?.status === 404) {
+            return res.status(404).json({ 
+                error: 'Quote not found',
+                details: error.message
+            });
+        } else if (error.response?.status === 400) {
+            return res.status(400).json({ 
+                error: 'Bad request',
+                details: error.message,
+                xeroError: error.response?.data
+            });
+        } else if (error.response?.status === 403) {
+            return res.status(403).json({ 
+                error: 'Access denied',
+                details: error.message
+            });
+        } else {
+            return res.status(500).json({ 
+                error: 'Internal server error while accepting Xero quote',
                 details: error.message
             });
         }
-        res.status(500).json({ 
-            error: 'Internal server error while accepting Xero quote.', 
-            details: error.message
-        });
     }
 };
 
@@ -495,10 +614,10 @@ export const createXeroProject = async (req, res) => {
         if (newProject && (newProject.ProjectID || newProject.projectId)) {
             const projectId = newProject.ProjectID || newProject.projectId;
             const defaultTasks = [
-                "manhours",
-                "overtime",
-                "transport",
-                "supplylabour"
+                "Manhour",
+                "Overtime",
+                "Transport",
+                "Supply Labour"
             ];
 
             const createdTasks = [];
@@ -606,123 +725,6 @@ export const createXeroProject = async (req, res) => {
 };
 
 /**
- * Debug endpoint to test quote acceptance with clean logging
- * 
- * @param {Object} req - Express request object with body containing pipedriveCompanyId and quoteNumber
- * @param {Object} res - Express response object
- * @returns {Promise<void>} Returns JSON with detailed quote acceptance results
- */
-export const debugQuoteAcceptance = async (req, res) => {
-    const { pipedriveCompanyId, quoteNumber } = req.body;
-
-    if (!pipedriveCompanyId || !quoteNumber) {
-        logWarning(req, 'Missing required parameters for quote acceptance debug', {
-            hasPipedriveCompanyId: !!pipedriveCompanyId,
-            hasQuoteNumber: !!quoteNumber
-        });
-        return res.status(400).json({ 
-            error: 'Pipedrive Company ID and Quote Number are required.',
-            example: {
-                pipedriveCompanyId: "12345",
-                quoteNumber: "QU-0001"
-            }
-        });
-    }
-
-    try {
-        logInfo(req, 'Starting quote acceptance debug test', { pipedriveCompanyId, quoteNumber });
-
-        // Get Xero token
-        const xeroToken = await tokenService.getAuthToken(pipedriveCompanyId, 'xero');
-        if (!xeroToken || !xeroToken.accessToken || !xeroToken.tenantId) {
-            logWarning(req, 'Xero not authenticated for company', { pipedriveCompanyId });
-            return res.status(401).json({ 
-                error: 'Xero not authenticated for this company',
-                pipedriveCompanyId 
-            });
-        }
-
-        logInfo(req, 'Xero authentication verified', { 
-            tenantId: xeroToken.tenantId,
-            hasToken: !!xeroToken.accessToken
-        });
-
-        // Get all quotes and find specific quote
-        const allQuotes = await xeroApiService.getXeroQuotes(xeroToken.accessToken, xeroToken.tenantId);
-        const foundQuote = await xeroApiService.findXeroQuoteByNumber(
-            xeroToken.accessToken, 
-            xeroToken.tenantId, 
-            quoteNumber
-        );
-
-        logInfo(req, 'Quote search completed', { 
-            totalQuotes: allQuotes.length,
-            targetQuoteFound: !!foundQuote,
-            targetQuoteStatus: foundQuote?.Status
-        });
-
-        // Attempt to accept quote if found and not already accepted
-        let acceptanceResult = null;
-        if (foundQuote && foundQuote.QuoteID) {
-            if (foundQuote.Status !== 'ACCEPTED') {
-                try {
-                    acceptanceResult = await xeroApiService.updateQuoteStatus(
-                        xeroToken.accessToken,
-                        xeroToken.tenantId,
-                        foundQuote.QuoteID,
-                        'ACCEPTED'
-                    );
-                    logSuccess(req, 'Quote acceptance successful', { 
-                        quoteId: foundQuote.QuoteID,
-                        newStatus: acceptanceResult.Status
-                    });
-                } catch (acceptError) {
-                    logWarning(req, 'Quote acceptance failed', { 
-                        quoteId: foundQuote.QuoteID,
-                        error: acceptError.message
-                    });
-                    acceptanceResult = {
-                        error: acceptError.message,
-                        response: acceptError.response?.data
-                    };
-                }
-            } else {
-                logInfo(req, 'Quote already accepted', { quoteId: foundQuote.QuoteID });
-                acceptanceResult = { message: 'Quote already accepted', currentStatus: foundQuote.Status };
-            }
-        }
-
-        // Return comprehensive results
-        res.json({
-            success: true,
-            debug: {
-                requestParams: { pipedriveCompanyId, quoteNumber },
-                xeroAuth: {
-                    available: true,
-                    tenantId: xeroToken.tenantId
-                },
-                allQuotesCount: allQuotes.length,
-                allQuoteNumbers: allQuotes.map(q => q.QuoteNumber),
-                targetQuote: {
-                    found: !!foundQuote,
-                    details: foundQuote ? {
-                        QuoteID: foundQuote.QuoteID,
-                        QuoteNumber: foundQuote.QuoteNumber,
-                        Status: foundQuote.Status,
-                        Reference: foundQuote.Reference
-                    } : null
-                },
-                acceptanceTest: acceptanceResult
-            }
-        });
-
-    } catch (error) {
-        // Error will be handled by the error middleware with proper logging
-        throw new Error(`Debug quote acceptance failed: ${error.message}`);
-    }
-};
-
-/**
  * Updates a quotation on Xero using Pipedrive deal data
  * 
  * @param {Object} req - Express request object with body containing pipedriveCompanyId and dealId
@@ -808,7 +810,7 @@ export const updateQuotationOnXero = async (req, res) => {
         });
 
     } catch (error) {
-        logError(req, 'Error updating quotation on Xero', {
+        logWarning(req, 'Error updating quotation on Xero', {
             dealId,
             pipedriveCompanyId,
             error: error.message,
@@ -1265,3 +1267,4 @@ export const createPartialInvoiceFromQuote = async (req, res) => {
         });
     }
 };
+
