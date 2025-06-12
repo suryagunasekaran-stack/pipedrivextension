@@ -16,6 +16,7 @@ describe('E2E: Xero Integration Tests', () => {
   let testPersonId;
   let testOrgId;
   let createdDealIds = []; // Track deals for cleanup
+  let createdXeroQuoteIds = []; // Track Xero quotes for cleanup
   let serverUrl; // Will be set based on environment
   
   // Cleanup configuration
@@ -44,8 +45,15 @@ describe('E2E: Xero Integration Tests', () => {
   }, 30000);
 
   afterAll(async () => {
-    // Always cleanup deals
-    await cleanupCreatedDeals();
+    // Conditional cleanup based on environment variable
+    if (CLEANUP_ENABLED) {
+      await cleanupXeroQuotes();
+      await cleanupCreatedDeals();
+    } else {
+      console.log('🔒 Cleanup disabled - deals and quotes preserved for inspection');
+      console.log(`📋 Created deal IDs: ${createdDealIds.join(', ')}`);
+      console.log(`📋 Created Xero quote IDs: ${createdXeroQuoteIds.join(', ')}`);
+    }
     
     // Cleanup test environment
     if (testEnv) {
@@ -69,11 +77,44 @@ describe('E2E: Xero Integration Tests', () => {
       });
       
       console.log(`✅ Server is running (status: ${response.status})`);
+      
+      // Try to get available routes for debugging
+      await checkAvailableRoutes();
+      
       return true;
     } catch (error) {
       console.log(`❌ Server is not running at ${serverUrl}`);
       console.log(`💡 Please start your server with: npm start`);
       throw new Error(`Server not running. Please start server at ${serverUrl} before running tests.`);
+    }
+  }
+
+  // Helper function to check available routes (for debugging)
+  async function checkAvailableRoutes() {
+    const commonRoutes = [
+      '/api/routes',
+      '/routes',
+      '/api/health',
+      '/health',
+      '/api/xero',
+      '/xero'
+    ];
+    
+    console.log(`🔍 Checking for available routes...`);
+    
+    for (const route of commonRoutes) {
+      try {
+        const response = await fetch(`${serverUrl}${route}`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(3000)
+        });
+        
+        if (response.ok) {
+          console.log(`✅ Found route: ${route} (${response.status})`);
+        }
+      } catch (error) {
+        // Route doesn't exist, that's fine
+      }
     }
   }
 
@@ -247,12 +288,18 @@ describe('E2E: Xero Integration Tests', () => {
 
   // Helper function to create Xero quote via API
   async function createXeroQuote(dealId, companyId) {
+    const endpoint = '/api/xero/create-quote';
+    
     try {
-      console.log(`🔄 Creating Xero quote for deal ${dealId}, company ${companyId}`);
-      console.log(`📡 POST ${serverUrl}/api/xero/quote`);
-      console.log(`📋 Request body:`, { pipedriveDealId: dealId, pipedriveCompanyId: companyId });
+      console.log(`🔄 Creating Xero quote using: ${serverUrl}${endpoint}`);
+      console.log(`📋 Request body:`, { 
+        pipedriveDealId: dealId, 
+        pipedriveCompanyId: companyId,
+        dealIdType: typeof dealId,
+        companyIdType: typeof companyId
+      });
       
-      const response = await fetch(`${serverUrl}/api/xero/quote`, {
+      const response = await fetch(`${serverUrl}${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -287,37 +334,94 @@ describe('E2E: Xero Integration Tests', () => {
         return null;
       }
     } catch (error) {
-      console.log(`❌ Network error creating Xero quote:`, error.message);
-      console.log(`📋 Error stack:`, error.stack);
+      console.log(`❌ Network error:`, error.message);
+      console.log(`❌ Error stack:`, error.stack);
       return null;
     }
   }
 
-  // Helper function to get Xero quote by quote number
+  // Helper function to get Xero quote using backend endpoint
   async function getXeroQuoteByNumber(quoteNumber) {
     try {
-      console.log(`🔍 Fetching Xero quote: ${quoteNumber}`);
+      console.log(`🔍 Fetching Xero quote via backend: ${quoteNumber}`);
       
-      const response = await fetch(`${serverUrl}/api/xero/quotes?QuoteNumber=${quoteNumber}`, {
+      const response = await fetch(`${serverUrl}/api/test/xero/quote/${quoteNumber}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json'
         }
       });
 
-      const result = await response.json();
+      console.log(`📡 Backend response status: ${response.status} ${response.statusText}`);
       
-      if (response.ok && result.Quotes && result.Quotes.length > 0) {
-        console.log(`✅ Found Xero quote: ${quoteNumber}`);
-        return result.Quotes[0]; // Return first quote
-      } else {
-        console.log(`⚠️  Xero quote not found: ${quoteNumber}`, result);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.log(`❌ Backend error:`, errorText);
         return null;
       }
+
+      const result = await response.json();
+      console.log(`📋 Backend response:`, {
+        quoteNumber: result.QuoteNumber,
+        quoteId: result.QuoteID,
+        status: result.Status,
+        total: result.Total,
+        lineItems: result.LineItems?.length || 0
+      });
+      
+      if (result.QuoteNumber === quoteNumber) {
+        console.log(`✅ Found Xero quote via backend: ${result.QuoteNumber}`);
+        return result;
+      }
+      
+      console.log(`⚠️  Quote number mismatch: expected ${quoteNumber}, got ${result.QuoteNumber}`);
+      return null;
     } catch (error) {
-      console.log(`❌ Error fetching Xero quote:`, error.message);
+      console.log(`❌ Error fetching Xero quote via backend:`, error.message);
       return null;
     }
+  }
+
+  // Helper function to cleanup Xero quotes
+  async function cleanupXeroQuotes() {
+    if (createdXeroQuoteIds.length === 0) {
+      console.log('🧹 No Xero quotes to cleanup');
+      return;
+    }
+
+    console.log(`🧹 Cleaning up ${createdXeroQuoteIds.length} created Xero quotes...`);
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const quoteId of createdXeroQuoteIds) {
+      try {
+        console.log(`🗑️  Voiding Xero quote ID: ${quoteId}...`);
+        
+        const deleteResponse = await fetch(`${serverUrl}/api/test/xero/quote/${quoteId}`, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (deleteResponse.ok) {
+          const result = await deleteResponse.json();
+          console.log(`✅ Successfully voided Xero quote: ${result.deletedQuote?.QuoteNumber || quoteId}`);
+          successCount++;
+        } else {
+          const errorResult = await deleteResponse.json();
+          console.log(`⚠️  Failed to void Xero quote ID: ${quoteId} - Status: ${deleteResponse.status}`, errorResult);
+          failCount++;
+        }
+      } catch (error) {
+        console.log(`❌ Error voiding Xero quote ID: ${quoteId}:`, error.message);
+        failCount++;
+      }
+    }
+    
+    console.log(`🧹 Xero cleanup complete: ${successCount} voided, ${failCount} failed`);
+    createdXeroQuoteIds = []; // Clear the array
   }
 
   // Helper function to get deal custom fields
@@ -442,19 +546,23 @@ describe('E2E: Xero Integration Tests', () => {
       const companyId = testConfig.companyId || '13961027'; // Use from config or hardcoded
       console.log(`📋 Using company ID: ${companyId}`);
       
-      const xeroQuoteResult = await createXeroQuote(dealId, companyId);
+      const xeroQuoteResult = await createXeroQuote(String(dealId), String(companyId));
       expect(xeroQuoteResult).not.toBeNull();
-      expect(xeroQuoteResult.success).toBe(true);
+      expect(xeroQuoteResult.quoteNumber).toBeDefined();
+      expect(xeroQuoteResult.quoteId).toBeDefined();
       
       const quoteNumber = xeroQuoteResult.quoteNumber;
       const quoteId = xeroQuoteResult.quoteId;
       
       expect(quoteNumber).toBeDefined();
       expect(quoteId).toBeDefined();
+      
+      // Track the created quote for cleanup
+      createdXeroQuoteIds.push(quoteId);
       console.log(`✅ Created Xero quote: ${quoteNumber} (ID: ${quoteId})`);
 
-      // Step 4: Fetch and verify Xero quote
-      console.log('\n🔍 Step 4: Fetching Xero quote for verification...');
+      // Step 4: Fetch and verify Xero quote directly from Xero API
+      console.log('\n🔍 Step 4: Fetching Xero quote directly from Xero API for verification...');
       
       // Wait a moment for Xero to process
       await new Promise(resolve => setTimeout(resolve, 2000));
@@ -463,7 +571,10 @@ describe('E2E: Xero Integration Tests', () => {
       expect(xeroQuote).not.toBeNull();
       expect(xeroQuote.QuoteNumber).toBe(quoteNumber);
       expect(xeroQuote.QuoteID).toBe(quoteId);
-      console.log(`✅ Verified Xero quote: ${xeroQuote.QuoteNumber}`);
+      console.log(`✅ Verified Xero quote exists: ${xeroQuote.QuoteNumber}`);
+      console.log(`   - Status: ${xeroQuote.Status}`);
+      console.log(`   - Total: ${xeroQuote.Total}`);
+      console.log(`   - Line Items: ${xeroQuote.LineItems?.length || 0}`);
 
       // Step 5: Compare products between Pipedrive and Xero
       console.log('\n📊 Step 5: Comparing products between Pipedrive and Xero...');
@@ -474,27 +585,82 @@ describe('E2E: Xero Integration Tests', () => {
       console.log('\n🔍 Step 6: Verifying Pipedrive custom fields...');
       
       // Wait a moment for custom fields to be updated
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 3000));
       
       const updatedDeal = await getDealCustomFields(dealId);
       expect(updatedDeal).not.toBeNull();
       
-      // Check for quote number custom field (adjust field key as needed)
-      const quoteNumberField = process.env.PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY || 'quote_number';
-      const quoteIdField = process.env.PIPEDRIVE_QUOTE_ID || 'quote_id';
+      console.log(`📋 Fetched updated deal data for ID: ${dealId}`);
+      console.log(`📋 Deal title: ${updatedDeal.title}`);
       
-      console.log(`🔍 Checking custom fields: ${quoteNumberField}, ${quoteIdField}`);
-      console.log(`📋 Deal custom fields:`, Object.keys(updatedDeal));
+      // Log all custom fields to see what's available
+      const customFields = Object.keys(updatedDeal).filter(key => 
+        key.includes('custom') || 
+        key.includes('quote') || 
+        key.includes('xero') ||
+        updatedDeal[key] === quoteNumber ||
+        updatedDeal[key] === quoteId
+      );
       
-      // Note: Custom field verification depends on your specific field setup
-      // Uncomment and adjust these based on your actual custom field keys
-      /*
-      expect(updatedDeal[quoteNumberField]).toBe(quoteNumber);
-      expect(updatedDeal[quoteIdField]).toBe(quoteId);
-      console.log(`✅ Custom fields verified: Quote Number = ${updatedDeal[quoteNumberField]}, Quote ID = ${updatedDeal[quoteIdField]}`);
-      */
+      console.log(`🔍 Custom/quote-related fields found:`, customFields);
       
-      console.log(`✅ Deal custom fields present (verification depends on field configuration)`);
+      // Log all fields that contain our quote values
+      const fieldsWithQuoteNumber = [];
+      const fieldsWithQuoteId = [];
+      
+      for (const [key, value] of Object.entries(updatedDeal)) {
+        if (value === quoteNumber) {
+          fieldsWithQuoteNumber.push(key);
+          console.log(`✅ Found quote number '${quoteNumber}' in field: ${key}`);
+        }
+        if (value === quoteId) {
+          fieldsWithQuoteId.push(key);
+          console.log(`✅ Found quote ID '${quoteId}' in field: ${key}`);
+        }
+      }
+      
+      // Check environment variables for expected field names
+      const expectedQuoteNumberField = process.env.PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY;
+      const expectedQuoteIdField = process.env.PIPEDRIVE_QUOTE_ID;
+      
+      console.log(`🔍 Expected field names from env:`);
+      console.log(`   PIPEDRIVE_QUOTE_CUSTOM_FIELD_KEY: ${expectedQuoteNumberField || 'not set'}`);
+      console.log(`   PIPEDRIVE_QUOTE_ID: ${expectedQuoteIdField || 'not set'}`);
+      
+      let customFieldsUpdated = 0;
+      
+      // Verify quote number field
+      if (fieldsWithQuoteNumber.length > 0) {
+        console.log(`✅ Quote number '${quoteNumber}' found in ${fieldsWithQuoteNumber.length} field(s): ${fieldsWithQuoteNumber.join(', ')}`);
+        customFieldsUpdated++;
+        
+        // If we have an expected field name, verify it specifically
+        if (expectedQuoteNumberField && updatedDeal[expectedQuoteNumberField]) {
+          expect(updatedDeal[expectedQuoteNumberField]).toBe(quoteNumber);
+          console.log(`✅ Quote number correctly set in expected field '${expectedQuoteNumberField}'`);
+        }
+      } else {
+        console.log(`⚠️  Quote number '${quoteNumber}' not found in any deal fields`);
+      }
+      
+      // Verify quote ID field
+      if (fieldsWithQuoteId.length > 0) {
+        console.log(`✅ Quote ID '${quoteId}' found in ${fieldsWithQuoteId.length} field(s): ${fieldsWithQuoteId.join(', ')}`);
+        customFieldsUpdated++;
+        
+        // If we have an expected field name, verify it specifically
+        if (expectedQuoteIdField && updatedDeal[expectedQuoteIdField]) {
+          expect(updatedDeal[expectedQuoteIdField]).toBe(quoteId);
+          console.log(`✅ Quote ID correctly set in expected field '${expectedQuoteIdField}'`);
+        }
+      } else {
+        console.log(`⚠️  Quote ID '${quoteId}' not found in any deal fields`);
+      }
+      
+      console.log(`📊 Custom fields updated: ${customFieldsUpdated}/2`);
+      
+      // At least one custom field should be updated
+      expect(customFieldsUpdated).toBeGreaterThan(0);
 
       console.log('\n🎉 Xero integration test completed successfully!\n');
       console.log(`📋 Summary:`);

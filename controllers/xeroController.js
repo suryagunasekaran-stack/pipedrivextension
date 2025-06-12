@@ -2121,3 +2121,55 @@ export const createInvoiceWithDocuments = async (req, res) => {
     }
 };
 
+// ===== TEST ENDPOINTS FOR E2E TESTING =====
+export const getXeroQuoteByNumber = async (req, res) => {
+    const { quoteNumber } = req.params;
+    try {
+        const xeroToken = await tokenService.getAuthToken('13961027', 'xero');
+        const xeroQuote = await xeroApiService.findXeroQuoteByNumber(xeroToken.accessToken, xeroToken.tenantId, quoteNumber);
+        
+        if (!xeroQuote) {
+            return res.status(404).json({ error: `Quote ${quoteNumber} not found` });
+        }
+        res.json(xeroQuote);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+export const getXeroQuoteById = async (req, res) => {
+    const { quoteId } = req.params;
+    try {
+        const xeroToken = await tokenService.getAuthToken('13961027', 'xero');
+        const xeroQuote = await xeroApiService.getXeroQuoteById(xeroToken.accessToken, xeroToken.tenantId, quoteId);
+        
+        if (!xeroQuote) {
+            return res.status(404).json({ error: `Quote ${quoteId} not found` });
+        }
+        res.json(xeroQuote);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+export const getAllXeroQuotes = async (req, res) => {
+    try {
+        const xeroToken = await tokenService.getAuthToken('13961027', 'xero');
+        const quotes = await xeroApiService.getXeroQuotes(xeroToken.accessToken, xeroToken.tenantId);
+        res.json({ Quotes: quotes, count: quotes.length });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+export const deleteXeroQuote = async (req, res) => {
+    const { quoteId } = req.params;
+    try {
+        const xeroToken = await tokenService.getAuthToken('13961027', 'xero');
+        const deletedQuote = await xeroApiService.deleteXeroQuote(xeroToken.accessToken, xeroToken.tenantId, quoteId);
+        res.json({ message: 'Quote deleted successfully', quoteId, deletedQuote });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+

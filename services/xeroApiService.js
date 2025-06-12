@@ -1467,3 +1467,80 @@ export const uploadMultipleInvoiceAttachments = async (accessToken, tenantId, in
     throw error;
   }
 };
+
+/**
+ * Deletes a Xero quote (for testing cleanup)
+ * 
+ * @param {string} accessToken - Valid Xero access token
+ * @param {string} tenantId - Xero tenant ID
+ * @param {string} quoteId - Xero quote ID to delete
+ * @returns {Promise<Object>} Deleted quote object
+ * @throws {Error} When quote deletion fails
+ */
+export const deleteXeroQuote = async (accessToken, tenantId, quoteId) => {
+  try {
+    logger.info('Deleting Xero quote for testing cleanup', {
+      quoteId,
+      tenantId: tenantId.substring(0, 8) + '...'
+    });
+
+    // First get the quote to return its details
+    const quoteToDelete = await getXeroQuoteById(accessToken, tenantId, quoteId);
+    
+    if (!quoteToDelete) {
+      throw new Error(`Quote with ID ${quoteId} not found`);
+    }
+
+    // Note: Xero API doesn't have a direct DELETE endpoint for quotes
+    // Instead, we'll update the quote status to VOIDED which effectively removes it
+    const voidPayload = {
+      Quotes: [{
+        QuoteID: quoteId,
+        Status: 'VOIDED'
+      }]
+    };
+
+    const response = await axios.post(
+      `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`,
+      voidPayload,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Xero-Tenant-Id': tenantId,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+      }
+    );
+
+    if (response.data.Quotes && response.data.Quotes.length > 0) {
+      const voidedQuote = response.data.Quotes[0];
+      
+      logger.info('Quote voided successfully for testing cleanup', {
+        QuoteID: voidedQuote.QuoteID,
+        QuoteNumber: voidedQuote.QuoteNumber,
+        Status: voidedQuote.Status,
+        originalQuoteNumber: quoteToDelete.QuoteNumber
+      });
+      
+      return voidedQuote;
+    } else {
+      throw new Error('No quote returned from Xero API after voiding');
+    }
+  } catch (error) {
+    logger.error('Error deleting/voiding Xero quote', {
+      quoteId,
+      error: error.response ? error.response.data : error.message,
+      status: error.response?.status
+    });
+    
+    if (error.response && error.response.data && error.response.data.Elements) {
+      const validationErrors = error.response.data.Elements[0]?.ValidationErrors || [];
+      if (validationErrors.length > 0) {
+        throw new Error(`Quote deletion failed: ${validationErrors.map(v => v.Message).join(', ')}`);
+      }
+    }
+    
+    throw error;
+  }
+};

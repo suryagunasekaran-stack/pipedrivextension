@@ -121,4 +121,10 @@ router.post('/api/xero/create-invoice-with-documents',
     xeroController.createInvoiceWithDocuments
 );
 
+// ===== TEST ENDPOINTS FOR E2E TESTING =====
+router.get('/api/test/xero/quote/:quoteNumber', xeroController.getXeroQuoteByNumber);
+router.get('/api/test/xero/quote-by-id/:quoteId', xeroController.getXeroQuoteById);
+router.delete('/api/test/xero/quote/:quoteId', xeroController.deleteXeroQuote);
+router.get('/api/test/xero/quotes', xeroController.getAllXeroQuotes);
+
 export default router;
