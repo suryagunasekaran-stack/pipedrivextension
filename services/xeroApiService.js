@@ -1492,17 +1492,21 @@ export const deleteXeroQuote = async (accessToken, tenantId, quoteId) => {
     }
 
     // Note: Xero API doesn't have a direct DELETE endpoint for quotes
-    // Instead, we'll update the quote status to VOIDED which effectively removes it
-    const voidPayload = {
+    // Instead, we'll update the quote status to DELETED
+    const deletePayload = {
       Quotes: [{
-        QuoteID: quoteId,
-        Status: 'VOIDED'
+        QuoteNumber: quoteToDelete.QuoteNumber,
+        Status: 'DELETED',
+        Contact: {
+          ContactID: quoteToDelete.Contact.ContactID
+        },
+        Date: quoteToDelete.Date
       }]
     };
 
     const response = await axios.post(
       `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`,
-      voidPayload,
+      deletePayload,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -1514,21 +1518,21 @@ export const deleteXeroQuote = async (accessToken, tenantId, quoteId) => {
     );
 
     if (response.data.Quotes && response.data.Quotes.length > 0) {
-      const voidedQuote = response.data.Quotes[0];
+      const deletedQuote = response.data.Quotes[0];
       
-      logger.info('Quote voided successfully for testing cleanup', {
-        QuoteID: voidedQuote.QuoteID,
-        QuoteNumber: voidedQuote.QuoteNumber,
-        Status: voidedQuote.Status,
+      logger.info('Quote deleted successfully for testing cleanup', {
+        QuoteID: deletedQuote.QuoteID,
+        QuoteNumber: deletedQuote.QuoteNumber,
+        Status: deletedQuote.Status,
         originalQuoteNumber: quoteToDelete.QuoteNumber
       });
       
-      return voidedQuote;
+      return deletedQuote;
     } else {
-      throw new Error('No quote returned from Xero API after voiding');
+      throw new Error('No quote returned from Xero API after deletion');
     }
   } catch (error) {
-    logger.error('Error deleting/voiding Xero quote', {
+    logger.error('Error deleting Xero quote', {
       quoteId,
       error: error.response ? error.response.data : error.message,
       status: error.response?.status
