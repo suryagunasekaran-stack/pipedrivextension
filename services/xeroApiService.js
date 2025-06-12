@@ -211,7 +211,7 @@ export const createQuote = async (accessToken, tenantId, quotePayload, idempoten
       currentStatus: createdQuote.Status
     });
 
-    // Step 2: Update quote status to SENT
+    // Step 2: Update quote status to SENT with comprehensive field preservation
     const updatePayload = {
       Quotes: [{
         QuoteNumber: createdQuote.QuoteNumber,
@@ -219,7 +219,36 @@ export const createQuote = async (accessToken, tenantId, quotePayload, idempoten
         Contact: {
           ContactID: createdQuote.Contact.ContactID
         },
-        Date: createdQuote.Date
+        Date: createdQuote.Date,
+        
+        // Preserve all existing quote fields
+        ...(createdQuote.ExpiryDate && { ExpiryDate: createdQuote.ExpiryDate }),
+        ...(createdQuote.CurrencyCode && { CurrencyCode: createdQuote.CurrencyCode }),
+        ...(createdQuote.CurrencyRate && { CurrencyRate: createdQuote.CurrencyRate }),
+        ...(createdQuote.SubTotal && { SubTotal: createdQuote.SubTotal }),
+        ...(createdQuote.TotalTax && { TotalTax: createdQuote.TotalTax }),
+        ...(createdQuote.Total && { Total: createdQuote.Total }),
+        ...(createdQuote.Title && { Title: createdQuote.Title }),
+        ...(createdQuote.Summary && { Summary: createdQuote.Summary }),
+        ...(createdQuote.Terms && { Terms: createdQuote.Terms }),
+        ...(createdQuote.Reference && { Reference: createdQuote.Reference }),
+        ...(createdQuote.BrandingThemeID && { BrandingThemeID: createdQuote.BrandingThemeID }),
+        
+        // Preserve line items with all their fields
+        ...(createdQuote.LineItems && { 
+          LineItems: createdQuote.LineItems.map(item => ({
+            Description: item.Description,
+            Quantity: item.Quantity,
+            UnitAmount: item.UnitAmount,
+            ...(item.LineAmount && { LineAmount: item.LineAmount }),
+            ...(item.AccountCode && { AccountCode: item.AccountCode }),
+            ...(item.TaxType && { TaxType: item.TaxType }),
+            ...(item.DiscountRate && { DiscountRate: item.DiscountRate }),
+            ...(item.DiscountAmount && { DiscountAmount: item.DiscountAmount }),
+            ...(item.Tracking && { Tracking: item.Tracking }),
+            ...(item.ItemCode && { ItemCode: item.ItemCode })
+          }))
+        })
       }]
     };
 

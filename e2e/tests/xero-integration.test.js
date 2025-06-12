@@ -10,6 +10,10 @@
 import { jest } from '@jest/globals';
 import { TestEnvironment } from '../config/test-environment.js';
 import { runXeroIntegrationTest } from './xero-integration/tests/integration-test.js';
+import { 
+  runComplexXeroIntegrationTest, 
+  runMultiCurrencyXeroIntegrationTest 
+} from './xero-integration/tests/complex-integration-test.js';
 
 describe('E2E: Xero Integration Tests', () => {
   let testEnv;
@@ -43,8 +47,8 @@ describe('E2E: Xero Integration Tests', () => {
     }
   });
 
-  describe('Xero Quote Integration', () => {
-    test('should create deal with products and sync to Xero quote', async () => {
+  describe('Basic Xero Quote Integration', () => {
+    test('should create deal with basic products and sync to Xero quote', async () => {
       const result = await runXeroIntegrationTest(testConfig);
       
       // Verify the test was successful
@@ -56,4 +60,67 @@ describe('E2E: Xero Integration Tests', () => {
       expect(result.customFieldsUpdated).toBeGreaterThan(0);
     }, 60000); // 60 second timeout
   });
+
+  describe('Complex Xero Quote Integration', () => {
+    test('should create deal with complex products (tax, discounts, accounts) and sync to Xero', async () => {
+      const result = await runComplexXeroIntegrationTest(testConfig);
+      
+      // Verify the complex test was successful
+      expect(result.success).toBe(true);
+      expect(result.dealId).toBeDefined();
+      expect(result.quoteNumber).toBeDefined();
+      expect(result.quoteId).toBeDefined();
+      expect(result.dealProducts).toBe(5); // Complex test has 5 products
+      expect(result.customFieldsUpdated).toBeGreaterThan(0);
+      expect(result.testType).toBe('complex');
+      
+      // Verify complex fields
+      expect(result.currency).toBeDefined();
+      expect(result.finalTotal).toBeDefined();
+      expect(parseFloat(result.finalTotal)).toBeGreaterThan(0);
+      
+      console.log(`🎯 Complex test completed - Currency: ${result.currency}, Total: $${result.finalTotal}`);
+    }, 90000); // 90 second timeout for complex test
+  });
+
+  // Multi-Currency tests commented out for debugging complex test
+  // describe('Multi-Currency Xero Quote Integration', () => {
+  //   test('should create USD deal with multi-currency products and sync to Xero', async () => {
+  //     const result = await runMultiCurrencyXeroIntegrationTest(testConfig, 'USD');
+  //     
+  //     // Verify the multi-currency test was successful
+  //     expect(result.success).toBe(true);
+  //     expect(result.dealId).toBeDefined();
+  //     expect(result.quoteNumber).toBeDefined();
+  //     expect(result.quoteId).toBeDefined();
+  //     expect(result.dealProducts).toBe(2); // Multi-currency test has 2 products
+  //     expect(result.testType).toBe('multi-currency');
+  //     
+  //     // Verify currency handling
+  //     expect(result.currency).toBe('USD');
+  //     expect(result.finalTotal).toBeDefined();
+  //     expect(parseFloat(result.finalTotal)).toBeGreaterThan(0);
+  //     
+  //     console.log(`🌍 Multi-currency test completed - Currency: ${result.currency}, Total: $${result.finalTotal}`);
+  //   }, 90000); // 90 second timeout for multi-currency test
+
+  //   test('should create EUR deal with multi-currency products and sync to Xero', async () => {
+  //     const result = await runMultiCurrencyXeroIntegrationTest(testConfig, 'EUR');
+  //     
+  //     // Verify the EUR test was successful
+  //     expect(result.success).toBe(true);
+  //     expect(result.dealId).toBeDefined();
+  //     expect(result.quoteNumber).toBeDefined();
+  //     expect(result.quoteId).toBeDefined();
+  //     expect(result.dealProducts).toBe(2);
+  //     expect(result.testType).toBe('multi-currency');
+  //     
+  //     // Verify EUR currency handling
+  //     expect(result.currency).toBe('EUR');
+  //     expect(result.finalTotal).toBeDefined();
+  //     expect(parseFloat(result.finalTotal)).toBeGreaterThan(0);
+  //     
+  //     console.log(`🇪🇺 EUR test completed - Currency: ${result.currency}, Total: $${result.finalTotal}`);
+  //   }, 90000); // 90 second timeout for EUR test
+  // });
 }); 
