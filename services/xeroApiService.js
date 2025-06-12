@@ -1484,25 +1484,31 @@ export const deleteXeroQuote = async (accessToken, tenantId, quoteId) => {
       tenantId: tenantId.substring(0, 8) + '...'
     });
 
-    // First get the quote to return its details
+    // First get the quote to get its contact and other details
     const quoteToDelete = await getXeroQuoteById(accessToken, tenantId, quoteId);
     
     if (!quoteToDelete) {
       throw new Error(`Quote with ID ${quoteId} not found`);
     }
 
-    // Note: Xero API doesn't have a direct DELETE endpoint for quotes
-    // Instead, we'll update the quote status to VOIDED which effectively removes it
-    const voidPayload = {
+    // Use the full quote data and just change the status to DELETED
+    // Xero requires the full quote payload when updating status
+    const deletePayload = {
       Quotes: [{
-        QuoteID: quoteId,
-        Status: 'VOIDED'
+        ...quoteToDelete, // Include all existing quote data
+        Status: 'DELETED' // Override the status to DELETED
       }]
     };
 
+    logger.info('Sending delete request to Xero', {
+      quoteId,
+      contactId: quoteToDelete.Contact.ContactID,
+      payload: deletePayload
+    });
+
     const response = await axios.post(
       `https://api.xero.com/api.xro/2.0/Quotes/${quoteId}`,
-      voidPayload,
+      deletePayload,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -1514,24 +1520,25 @@ export const deleteXeroQuote = async (accessToken, tenantId, quoteId) => {
     );
 
     if (response.data.Quotes && response.data.Quotes.length > 0) {
-      const voidedQuote = response.data.Quotes[0];
+      const deletedQuote = response.data.Quotes[0];
       
-      logger.info('Quote voided successfully for testing cleanup', {
-        QuoteID: voidedQuote.QuoteID,
-        QuoteNumber: voidedQuote.QuoteNumber,
-        Status: voidedQuote.Status,
+      logger.info('Quote deleted successfully for testing cleanup', {
+        QuoteID: deletedQuote.QuoteID,
+        QuoteNumber: deletedQuote.QuoteNumber,
+        Status: deletedQuote.Status,
         originalQuoteNumber: quoteToDelete.QuoteNumber
       });
       
-      return voidedQuote;
+      return deletedQuote;
     } else {
-      throw new Error('No quote returned from Xero API after voiding');
+      throw new Error('No quote returned from Xero API after deletion');
     }
   } catch (error) {
-    logger.error('Error deleting/voiding Xero quote', {
+    logger.error('Error deleting Xero quote', {
       quoteId,
       error: error.response ? error.response.data : error.message,
-      status: error.response?.status
+      status: error.response?.status,
+      responseData: error.response?.data
     });
     
     if (error.response && error.response.data && error.response.data.Elements) {

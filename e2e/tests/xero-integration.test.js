@@ -45,14 +45,17 @@ describe('E2E: Xero Integration Tests', () => {
   }, 30000);
 
   afterAll(async () => {
-    // Conditional cleanup based on environment variable
+    // Always cleanup Xero quotes to avoid cluttering Xero system
+    console.log('\n🧹 Starting cleanup process...');
+    await cleanupXeroQuotes();
+    
+    // Conditional cleanup for Pipedrive deals based on environment variable
     if (CLEANUP_ENABLED) {
-      await cleanupXeroQuotes();
       await cleanupCreatedDeals();
     } else {
-      console.log('🔒 Cleanup disabled - deals and quotes preserved for inspection');
+      console.log('🔒 Pipedrive cleanup disabled - deals preserved for inspection');
       console.log(`📋 Created deal IDs: ${createdDealIds.join(', ')}`);
-      console.log(`📋 Created Xero quote IDs: ${createdXeroQuoteIds.join(', ')}`);
+      console.log('💡 Xero quotes are always cleaned up to avoid system clutter');
     }
     
     // Cleanup test environment
@@ -382,6 +385,48 @@ describe('E2E: Xero Integration Tests', () => {
     }
   }
 
+  // Helper function to get Xero quote by ID
+  async function getXeroQuoteById(quoteId) {
+    try {
+      console.log(`🔍 Fetching Xero quote by ID: ${quoteId}`);
+      
+      const response = await fetch(`${serverUrl}/api/test/xero/quote-by-id/${quoteId}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+
+      console.log(`📡 Backend response status: ${response.status} ${response.statusText}`);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.log(`❌ Backend error:`, errorText);
+        return null;
+      }
+
+      const result = await response.json();
+      console.log(`📋 Backend response:`, {
+        quoteNumber: result.QuoteNumber,
+        quoteId: result.QuoteID,
+        status: result.Status,
+        total: result.Total,
+        lineItems: result.LineItems?.length || 0
+      });
+      
+      if (result.QuoteID === quoteId) {
+        console.log(`✅ Found Xero quote by ID: ${result.QuoteNumber} (${result.QuoteID})`);
+        return result;
+      }
+      
+      console.log(`⚠️  Quote ID mismatch: expected ${quoteId}, got ${result.QuoteID}`);
+      return null;
+    } catch (error) {
+      console.log(`❌ Error fetching Xero quote by ID:`, error.message);
+      return null;
+    }
+  }
+
   // Helper function to cleanup Xero quotes
   async function cleanupXeroQuotes() {
     if (createdXeroQuoteIds.length === 0) {
@@ -402,26 +447,44 @@ describe('E2E: Xero Integration Tests', () => {
           method: 'DELETE',
           headers: {
             'Content-Type': 'application/json'
-          }
+          },
+          signal: AbortSignal.timeout(10000) // 10 second timeout
         });
+        
+        console.log(`📡 Delete response status: ${deleteResponse.status}`);
         
         if (deleteResponse.ok) {
           const result = await deleteResponse.json();
           console.log(`✅ Successfully voided Xero quote: ${result.deletedQuote?.QuoteNumber || quoteId}`);
+          console.log(`   Quote status changed to: ${result.deletedQuote?.Status || 'VOIDED'}`);
           successCount++;
         } else {
-          const errorResult = await deleteResponse.json();
-          console.log(`⚠️  Failed to void Xero quote ID: ${quoteId} - Status: ${deleteResponse.status}`, errorResult);
+          let errorResult;
+          try {
+            errorResult = await deleteResponse.json();
+          } catch (parseError) {
+            errorResult = { error: 'Failed to parse error response', text: await deleteResponse.text() };
+          }
+          console.log(`⚠️  Failed to void Xero quote ID: ${quoteId} - Status: ${deleteResponse.status}`);
+          console.log(`   Error details:`, errorResult);
           failCount++;
         }
       } catch (error) {
         console.log(`❌ Error voiding Xero quote ID: ${quoteId}:`, error.message);
+        console.log(`   Error stack:`, error.stack);
         failCount++;
       }
     }
     
     console.log(`🧹 Xero cleanup complete: ${successCount} voided, ${failCount} failed`);
-    createdXeroQuoteIds = []; // Clear the array
+    
+    // If there were failures, list the quote IDs that couldn't be cleaned up
+    if (failCount > 0) {
+      console.log(`⚠️  Manual cleanup may be required for failed quotes`);
+      console.log(`💡 You can manually void these quotes in Xero or use the test endpoints`);
+    }
+    
+    createdXeroQuoteIds = []; // Clear the array regardless of success/failure
   }
 
   // Helper function to get deal custom fields
@@ -567,10 +630,10 @@ describe('E2E: Xero Integration Tests', () => {
       // Wait a moment for Xero to process
       await new Promise(resolve => setTimeout(resolve, 2000));
       
-      const xeroQuote = await getXeroQuoteByNumber(quoteNumber);
+      const xeroQuote = await getXeroQuoteById(quoteId);
       expect(xeroQuote).not.toBeNull();
-      expect(xeroQuote.QuoteNumber).toBe(quoteNumber);
       expect(xeroQuote.QuoteID).toBe(quoteId);
+      expect(xeroQuote.QuoteNumber).toBe(quoteNumber);
       console.log(`✅ Verified Xero quote exists: ${xeroQuote.QuoteNumber}`);
       console.log(`   - Status: ${xeroQuote.Status}`);
       console.log(`   - Total: ${xeroQuote.Total}`);
