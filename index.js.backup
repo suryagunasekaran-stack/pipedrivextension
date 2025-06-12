@@ -14,50 +14,36 @@ import projectRoutes from './routes/projectRoutes.js'; // Added .js
 
 const app = express();
 
-// Enable CORS - VERY PERMISSIVE configuration for OAuth callbacks
+// Enable CORS - configure appropriately for production
 const corsOptions = {
     origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps, Postman, curl requests)
+        // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
         
-        // Always allow your frontend
-        if (origin === process.env.FRONTEND_BASE_URL) {
-            return callback(null, true);
-        }
+        const allowedOrigins = [
+            process.env.FRONTEND_BASE_URL || 'http://localhost:3001',
+            ...(process.env.NODE_ENV === 'development' ? [
+                'http://localhost:3001', // Next.js dev server
+                'http://localhost:3000', // This server
+            ] : [])
+        ];
         
-        // Allow all OAuth provider domains
-        if (origin && (
-            origin.includes('pipedrive.com') || 
-            origin.includes('xero.com') ||
-            origin.includes('vercel.app') ||
-            origin.includes('railway.app')
-        )) {
-            return callback(null, true);
-        }
-        
-        // In development, allow localhost and any local development domains
+        // In development, be more permissive for Next.js internal requests
         if (process.env.NODE_ENV !== 'production') {
-            if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+            if (origin.includes('localhost')) {
                 return callback(null, true);
             }
         }
         
-        // For production, be more permissive - just log blocked origins for debugging
-        console.log('CORS origin check:', origin);
-        return callback(null, true); // Allow all origins for now to ensure OAuth works
+        if (allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
     },
     credentials: true, // Allow cookies and credentials
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH', 'HEAD'], // Allow all common HTTP methods
-    allowedHeaders: [
-        'Content-Type', 
-        'Authorization', 
-        'X-Requested-With', 
-        'Accept', 
-        'Origin',
-        'X-Request-ID',
-        'Cache-Control',
-        'Pragma'
-    ], // Allow common headers
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'], // Allow all common HTTP methods
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'], // Allow common headers
     optionsSuccessStatus: 200 // Some legacy browsers (IE11, various SmartTVs) choke on 204
 };
 
@@ -93,6 +79,54 @@ app.get('/api/status', (req, res) => {
         requestId: req.id,
         timestamp: new Date().toISOString() 
     });
+});
+
+// Deployment info endpoint - shows where the app is deployed and configuration
+app.get('/deployment-info', (req, res) => {
+    const deploymentInfo = {
+        message: '🚀 Pipedrive-Xero Integration API',
+        status: 'deployed and running',
+        environment: process.env.NODE_ENV || 'development',
+        timestamp: new Date().toISOString(),
+        uptime: `${Math.floor(process.uptime())} seconds`,
+        deployment: {
+            apiBaseUrl: process.env.API_BASE_URL || `http://localhost:${port}`,
+            frontendBaseUrl: process.env.FRONTEND_BASE_URL || 'http://localhost:3001',
+            railwayUrl: process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : 'Railway URL not available',
+            isProduction: process.env.NODE_ENV === 'production'
+        },
+        endpoints: {
+            health: '/health',
+            auth: '/auth',
+            pipedriveAction: '/pipedrive-action',
+            xeroStatus: '/api/xero/status',
+            createQuote: '/api/xero/create-quote'
+        },
+        integrations: {
+            pipedrive: {
+                configured: !!(process.env.CLIENT_ID && process.env.CLIENT_SECRET),
+                redirectUri: process.env.REDIRECT_URI || 'Not configured'
+            },
+            xero: {
+                configured: !!(process.env.XERO_CLIENT_ID && process.env.XERO_CLIENT_SECRET),
+                redirectUri: process.env.XERO_REDIRECT_URI || 'Not configured'
+            },
+            database: {
+                configured: !!process.env.MONGODB_URI,
+                type: process.env.MONGODB_URI ? 'MongoDB' : 'Not configured'
+            }
+        },
+        version: '1.0.0',
+        nodeVersion: process.version,
+        platform: process.platform
+    };
+    
+    res.json(deploymentInfo);
+});
+
+// Root endpoint with deployment info
+app.get('/', (req, res) => {
+    res.redirect('/deployment-info');
 });
 
 // Test endpoint to demonstrate enhanced logging
