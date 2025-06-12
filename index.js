@@ -22,8 +22,10 @@ const corsOptions = {
         
         const allowedOrigins = [
             process.env.FRONTEND_BASE_URL || 'http://localhost:3001',
-            'http://localhost:3001', // Next.js dev server
-            'http://localhost:3000', // This server
+            ...(process.env.NODE_ENV === 'development' ? [
+                'http://localhost:3001', // Next.js dev server
+                'http://localhost:3000', // This server
+            ] : [])
         ];
         
         // In development, be more permissive for Next.js internal requests

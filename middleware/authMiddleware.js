@@ -45,7 +45,7 @@ export const requirePipedriveAuth = async (req, res, next) => {
                 authRequired: true,
                 authType: 'pipedrive',
                 companyId: companyId,
-                authUrl: `http://localhost:3000/auth/auth-url?companyId=${companyId}`
+                authUrl: `${process.env.API_BASE_URL || 'http://localhost:3000'}/auth/auth-url?companyId=${companyId}`
             });
         }
 
@@ -83,7 +83,7 @@ export const requirePipedriveAuth = async (req, res, next) => {
                     authRequired: true,
                     authType: 'pipedrive',
                     companyId: companyId,
-                    authUrl: `http://localhost:3000/auth?companyId=${companyId}`
+                    authUrl: `${process.env.API_BASE_URL || 'http://localhost:3000'}/auth?companyId=${companyId}`
                 });
             }
         } else {
@@ -225,7 +225,7 @@ export const requireXeroAuth = async (req, res, next) => {
                 authRequired: true,
                 authType: 'xero',
                 companyId: companyId,
-                authUrl: `http://localhost:3000/auth/connect-xero?pipedriveCompanyId=${companyId}`
+                authUrl: `${process.env.API_BASE_URL || 'http://localhost:3000'}/auth/connect-xero?pipedriveCompanyId=${companyId}`
             });
         }
 
@@ -263,7 +263,7 @@ export const requireXeroAuth = async (req, res, next) => {
                     authRequired: true,
                     authType: 'xero',
                     companyId: companyId,
-                    authUrl: `http://localhost:3000/auth/connect-xero?pipedriveCompanyId=${companyId}`
+                    authUrl: `${process.env.API_BASE_URL || 'http://localhost:3000'}/auth/connect-xero?pipedriveCompanyId=${companyId}`
                 });
             }
         } else {

@@ -79,7 +79,7 @@ describe('Authentication Middleware', () => {
                 authRequired: true,
                 authType: 'pipedrive',
                 companyId: 'test-company',
-                authUrl: 'http://localhost:3000/auth/auth-url?companyId=test-company'
+                authUrl: `${process.env.API_BASE_URL || 'http://localhost:3000'}/auth/auth-url?companyId=test-company`
             });
             expect(next).not.toHaveBeenCalled();
         });
@@ -150,7 +150,7 @@ describe('Authentication Middleware', () => {
                 authRequired: true,
                 authType: 'pipedrive',
                 companyId: 'test-company',
-                authUrl: 'http://localhost:3000/auth?companyId=test-company'
+                authUrl: `${process.env.API_BASE_URL || 'http://localhost:3000'}/auth?companyId=test-company`
             });
             expect(next).not.toHaveBeenCalled();
         });
@@ -182,7 +182,7 @@ describe('Authentication Middleware', () => {
                 authRequired: true,
                 authType: 'xero',
                 companyId: 'test-company',
-                authUrl: 'http://localhost:3000/auth/connect-xero?pipedriveCompanyId=test-company'
+                authUrl: `${process.env.API_BASE_URL || 'http://localhost:3000'}/auth/connect-xero?pipedriveCompanyId=test-company`
             });
             expect(next).not.toHaveBeenCalled();
         });
@@ -253,7 +253,7 @@ describe('Authentication Middleware', () => {
                 authRequired: true,
                 authType: 'xero',
                 companyId: 'test-company',
-                authUrl: 'http://localhost:3000/auth/connect-xero?pipedriveCompanyId=test-company'
+                authUrl: `${process.env.API_BASE_URL || 'http://localhost:3000'}/auth/connect-xero?pipedriveCompanyId=test-company`
             });
             expect(next).not.toHaveBeenCalled();
         });

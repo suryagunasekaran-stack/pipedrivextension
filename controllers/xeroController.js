@@ -73,7 +73,7 @@ export const getXeroStatus = async (req, res) => {
             const responseData = { 
                 isConnected: false, 
                 message: 'Xero is not connected.',
-                authUrl: `http://localhost:3000/auth/connect-xero?pipedriveCompanyId=${pipedriveCompanyId}`
+                authUrl: `${process.env.API_BASE_URL || 'http://localhost:3000'}/auth/connect-xero?pipedriveCompanyId=${pipedriveCompanyId}`
             };
 
             logSuccess(req, 'Xero not connected - auth URL provided', responseData);
