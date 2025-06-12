@@ -14,6 +14,14 @@ import {
   runComplexXeroIntegrationTest, 
   runMultiCurrencyXeroIntegrationTest 
 } from './xero-integration/tests/complex-integration-test.js';
+import { 
+  runNoProductsTest,
+  runZeroNegativeProductsTest,
+  runSpecialCharactersTest,
+  runMultipleTaxRatesTest,
+  runDiscountedProductsTest,
+  runMissingOrganizationTest
+} from './xero-integration/tests/edge-cases-test.js';
 
 describe('E2E: Xero Integration Tests', () => {
   let testEnv;
@@ -123,4 +131,51 @@ describe('E2E: Xero Integration Tests', () => {
   //     console.log(`🇪🇺 EUR test completed - Currency: ${result.currency}, Total: $${result.finalTotal}`);
   //   }, 90000); // 90 second timeout for EUR test
   // });
+
+  describe('Edge Cases Xero Quote Integration', () => {
+    test('should handle no products scenario gracefully', async () => {
+      const result = await runNoProductsTest(testConfig);
+      
+      expect(result.success).toBe(true);
+      expect(result.reason).toContain('no products');
+    }, 60000);
+
+    test('should handle zero/negative product values correctly', async () => {
+      const result = await runZeroNegativeProductsTest(testConfig);
+      
+      expect(result.success).toBe(true);
+      expect(result.reason).toMatch(/zero|negative|invalid|rejected/i);
+    }, 60000);
+
+    test('should handle special characters in product names/descriptions', async () => {
+      const result = await runSpecialCharactersTest(testConfig);
+      
+      expect(result.success).toBe(true);
+      expect(result.dealId).toBeDefined();
+      expect(result.quoteNumber).toBeDefined();
+    }, 60000);
+
+    test('should handle multiple tax rates in same quote', async () => {
+      const result = await runMultipleTaxRatesTest(testConfig);
+      
+      expect(result.success).toBe(true);
+      expect(result.dealId).toBeDefined();
+      expect(result.quoteNumber).toBeDefined();
+    }, 60000);
+
+    test('should handle line-level discounts correctly', async () => {
+      const result = await runDiscountedProductsTest(testConfig);
+      
+      expect(result.success).toBe(true);
+      expect(result.dealId).toBeDefined();
+      expect(result.quoteNumber).toBeDefined();
+    }, 60000);
+
+    test('should handle missing organization gracefully', async () => {
+      const result = await runMissingOrganizationTest(testConfig);
+      
+      expect(result.success).toBe(true);
+      expect(result.reason).toContain('organization');
+    }, 60000);
+  });
 }); 
