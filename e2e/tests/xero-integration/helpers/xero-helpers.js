@@ -100,6 +100,48 @@ export async function getXeroQuoteByNumber(quoteNumber, serverUrl) {
   }
 }
 
+// Helper function to get Xero quote using backend endpoint by ID
+export async function getXeroQuoteById(quoteId, serverUrl) {
+  try {
+    console.log(`🔍 Fetching Xero quote by ID via backend: ${quoteId}`);
+    
+    const response = await fetch(`${serverUrl}/api/test/xero/quote-by-id/${quoteId}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
+    console.log(`📡 Backend response status: ${response.status} ${response.statusText}`);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.log(`❌ Backend error:`, errorText);
+      return null;
+    }
+
+    const result = await response.json();
+    console.log(`📋 Backend response:`, {
+      quoteNumber: result.QuoteNumber,
+      quoteId: result.QuoteID,
+      status: result.Status,
+      total: result.Total,
+      lineItems: result.LineItems?.length || 0
+    });
+    
+    if (result.QuoteID === quoteId) {
+      console.log(`✅ Found Xero quote by ID via backend: ${result.QuoteNumber} (ID: ${result.QuoteID})`);
+      return result;
+    }
+    
+    console.log(`⚠️  Quote ID mismatch: expected ${quoteId}, got ${result.QuoteID}`);
+    return null;
+  } catch (error) {
+    console.log(`❌ Error fetching Xero quote by ID via backend:`, error.message);
+    return null;
+  }
+}
+
 // Helper function to cleanup Xero quotes
 export async function cleanupXeroQuotes(createdXeroQuoteIds, serverUrl) {
   if (createdXeroQuoteIds.length === 0) {

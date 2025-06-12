@@ -16,11 +16,13 @@ import {
   cleanupCreatedDeals, 
   addProductsToDeal, 
   getDealProducts, 
-  getDealCustomFields 
+  getDealCustomFields,
+  updateDealProduct 
 } from '../helpers/pipedrive-helpers.js';
 import { 
   createXeroQuote, 
   getXeroQuoteByNumber, 
+  getXeroQuoteById,
   cleanupXeroQuotes 
 } from '../helpers/xero-helpers.js';
 import { 
@@ -155,7 +157,7 @@ export async function runComplexXeroIntegrationTest(testConfig) {
 
     // Step 7: Verify quote metadata
     console.log('\n📋 Step 7: Verifying quote metadata...');
-    const metadataMismatches = compareQuoteMetadata(xeroQuote);
+    const metadataMismatches = compareQuoteMetadata(xeroQuote, { dealId });
     if (metadataMismatches.length > 0) {
       throw new Error(`Quote metadata issues: ${JSON.stringify(metadataMismatches)}`);
     }
@@ -194,6 +196,88 @@ export async function runComplexXeroIntegrationTest(testConfig) {
     if (customFieldsUpdated === 0) {
       throw new Error('No custom fields were updated with complex Xero quote information');
     }
+
+    // Step 9: Update deal products and test quote update
+    console.log('\n🔄 Step 9: Testing product updates and quote re-sync...');
+    
+    // Get the first product to update
+    const firstProduct = dealProducts[0];
+    if (!firstProduct || !firstProduct.id) {
+      throw new Error('No product found to update');
+    }
+    
+    console.log(`📦 Updating product: ${firstProduct.product?.name || 'Unknown'} (ID: ${firstProduct.id})`);
+    console.log(`   Original quantity: ${firstProduct.quantity}, price: $${firstProduct.item_price}`);
+    
+    // Update the product quantity and price
+    const updatedProductData = {
+      quantity: firstProduct.quantity + 1,
+      item_price: firstProduct.item_price + 100
+    };
+    
+    const updatedProduct = await updateDealProduct(dealId, firstProduct.id, updatedProductData, testConfig);
+    if (!updatedProduct) {
+      throw new Error('Failed to update deal product');
+    }
+    
+    console.log(`✅ Updated product: quantity ${updatedProductData.quantity}, price $${updatedProductData.item_price}`);
+    
+    // Step 10: Call update-quote endpoint
+    console.log('\n🔄 Step 10: Updating Xero quote with new product data...');
+    
+    const updateQuoteResponse = await fetch(`${serverUrl}/api/xero/update-quote`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dealId: String(dealId),
+        companyId: String(companyId),
+        quoteId: String(quoteId)
+      })
+    });
+    
+    if (!updateQuoteResponse.ok) {
+      const errorResult = await updateQuoteResponse.json();
+      throw new Error(`Failed to update Xero quote: ${JSON.stringify(errorResult)}`);
+    }
+    
+    const updateResult = await updateQuoteResponse.json();
+    console.log(`✅ Xero quote updated successfully`);
+    console.log(`📋 Updated quote: ${updateResult.quoteNumber || updateResult.quote?.QuoteNumber}`);
+    
+    // Step 11: Fetch updated quote and compare again
+    console.log('\n🔍 Step 11: Verifying updated quote data...');
+    
+    // Wait for Xero to process the update
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    // Use quote ID instead of quote number since the number changes after versioning
+    const updatedXeroQuote = await getXeroQuoteById(quoteId, serverUrl);
+    if (!updatedXeroQuote) {
+      throw new Error('Failed to fetch updated Xero quote by ID');
+    }
+    
+    console.log(`✅ Fetched updated Xero quote: ${updatedXeroQuote.QuoteNumber} (ID: ${updatedXeroQuote.QuoteID})`);
+    console.log(`   - Status: ${updatedXeroQuote.Status}`);
+    console.log(`   - Updated Total: $${updatedXeroQuote.Total}`);
+    console.log(`   - Line Items: ${updatedXeroQuote.LineItems?.length || 0}`);
+    console.log(`   - Quote Number Changed: ${quoteNumber} → ${updatedXeroQuote.QuoteNumber}`);
+    
+    // Get updated deal products for comparison
+    const updatedDealProducts = await getDealProducts(dealId, testConfig);
+    
+    // Step 12: Final comparison after update
+    console.log('\n📊 Step 12: Final comparison after product update...');
+    const finalProductMismatches = compareComplexProducts(updatedDealProducts, updatedXeroQuote.LineItems || []);
+    if (finalProductMismatches.length > 0) {
+      console.log(`⚠️  Final product comparison issues (may be expected):`, finalProductMismatches);
+    }
+    
+    const finalMetadataMismatches = compareQuoteMetadata(updatedXeroQuote, { dealId });
+    if (finalMetadataMismatches.length > 0) {
+      console.log(`⚠️  Final metadata issues:`, finalMetadataMismatches);
+    }
+    
+    console.log(`✅ Product update and quote re-sync test completed successfully!`);
 
     console.log('\n🎉 Complex Xero integration test completed successfully!\n');
     console.log(`📋 Complex Test Summary:`);

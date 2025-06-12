@@ -1086,14 +1086,13 @@ export const updateQuote = async (accessToken, tenantId, quoteId, quotePayload) 
       },
       Date: currentQuote.Date,
       
-      // Preserve all existing quote fields
+      // Preserve all existing quote fields (but exclude Status to avoid validation issues)
       ...(currentQuote.ExpiryDate && { ExpiryDate: currentQuote.ExpiryDate }),
-      ...(currentQuote.Status && { Status: currentQuote.Status }),
+      // Note: Excluding Status field to avoid "Please provide a valid Status Code" error
+      // Xero will maintain the current status when updating line items
       ...(currentQuote.CurrencyCode && { CurrencyCode: currentQuote.CurrencyCode }),
       ...(currentQuote.CurrencyRate && { CurrencyRate: currentQuote.CurrencyRate }),
-      ...(currentQuote.SubTotal && { SubTotal: currentQuote.SubTotal }),
-      ...(currentQuote.TotalTax && { TotalTax: currentQuote.TotalTax }),
-      ...(currentQuote.Total && { Total: currentQuote.Total }),
+      // Note: Excluding calculated fields (SubTotal, TotalTax, Total) as Xero will recalculate them
       ...(currentQuote.Title && { Title: currentQuote.Title }),
       ...(currentQuote.Summary && { Summary: currentQuote.Summary }),
       ...(currentQuote.Terms && { Terms: currentQuote.Terms }),

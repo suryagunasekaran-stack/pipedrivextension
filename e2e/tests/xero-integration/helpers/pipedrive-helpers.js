@@ -194,4 +194,33 @@ export async function getDealCustomFields(dealId, testConfig) {
     console.log(`❌ Error fetching deal ${dealId}:`, error.message);
     return null;
   }
-} 
+}
+
+// Helper function to update deal product
+export async function updateDealProduct(dealId, productAttachmentId, updateData, testConfig) {
+  try {
+    console.log(`🔄 Updating product attachment ${productAttachmentId} for deal ${dealId}`);
+    
+    const response = await fetch(
+      `https://${testConfig.companyDomain}.pipedrive.com/api/v2/deals/${dealId}/products/${productAttachmentId}?api_token=${testConfig.apiToken}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updateData)
+      }
+    );
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      console.log(`✅ Updated product attachment ${productAttachmentId} for deal ${dealId}`);
+      return result.data;
+    } else {
+      console.log(`⚠️  Failed to update deal product:`, result);
+      return null;
+    }
+  } catch (error) {
+    console.log(`❌ Error updating deal product:`, error.message);
+    return null;
+  }
+}

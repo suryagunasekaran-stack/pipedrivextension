@@ -20,7 +20,7 @@ import {
   getXeroQuoteByNumber, 
   cleanupXeroQuotes 
 } from '../helpers/xero-helpers.js';
-import { compareProducts } from '../utils/comparison-utils.js';
+import { compareProducts, compareQuoteMetadata } from '../utils/comparison-utils.js';
 import { testProducts, generateTestDealData } from '../fixtures/test-data.js';
 
 export async function runXeroIntegrationTest(testConfig) {
@@ -114,6 +114,13 @@ export async function runXeroIntegrationTest(testConfig) {
     const productMismatches = compareProducts(dealProducts, xeroQuote.LineItems || []);
     if (productMismatches.length > 0) {
       throw new Error(`Product mismatches found: ${JSON.stringify(productMismatches)}`);
+    }
+
+    // Step 5.5: Verify quote metadata
+    console.log('\n📋 Step 5.5: Verifying quote metadata...');
+    const metadataMismatches = compareQuoteMetadata(xeroQuote, { dealId });
+    if (metadataMismatches.length > 0) {
+      throw new Error(`Quote metadata issues: ${JSON.stringify(metadataMismatches)}`);
     }
 
     // Step 6: Verify custom fields

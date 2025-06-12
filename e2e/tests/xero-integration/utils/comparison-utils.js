@@ -157,6 +157,18 @@ export function compareQuoteFinancials(dealData, xeroQuote) {
   return mismatches;
 }
 
+// Helper function to parse Microsoft JSON date format: /Date(1749686400000)/
+function parseMicrosoftDate(dateString) {
+  if (typeof dateString === 'string' && dateString.startsWith('/Date(') && dateString.endsWith(')/')) {
+    const match = dateString.match(/\/Date\((\d+)\)\//);
+    if (match) {
+      const timestamp = parseInt(match[1]);
+      return new Date(timestamp);
+    }
+  }
+  return new Date(dateString);
+}
+
 // Compare quote metadata (dates, status, etc.)
 export function compareQuoteMetadata(xeroQuote, expectedData = {}) {
   console.log(`📋 Comparing quote metadata`);
@@ -177,12 +189,69 @@ export function compareQuoteMetadata(xeroQuote, expectedData = {}) {
     mismatches.push(`Unexpected quote status: ${xeroQuote.Status} (expected one of: ${allowedStatuses.join(', ')})`);
   }
   
-  // Date should be recent (within last day)
-  const quoteDate = new Date(xeroQuote.Date);
-  const now = new Date();
-  const daysDifference = Math.abs(now - quoteDate) / (1000 * 60 * 60 * 24);
-  if (daysDifference > 1) {
-    mismatches.push(`Quote date seems too old: ${xeroQuote.Date} (${daysDifference.toFixed(1)} days ago)`);
+  // Date should be today's date (issue date)
+  try {
+    if (xeroQuote.Date) {
+      const quoteDate = parseMicrosoftDate(xeroQuote.Date);
+      const now = new Date();
+      
+      console.log(`🔍 Date parsing debug:`);
+      console.log(`   Raw quote date: ${xeroQuote.Date}`);
+      console.log(`   Parsed quote date: ${quoteDate.toISOString()}`);
+      console.log(`   Today: ${now.toISOString()}`);
+      
+      // Check if the date is valid
+      if (isNaN(quoteDate.getTime())) {
+        mismatches.push(`Invalid quote date format: ${xeroQuote.Date}`);
+      } else {
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const quoteDateOnly = new Date(quoteDate.getFullYear(), quoteDate.getMonth(), quoteDate.getDate());
+        
+        console.log(`   Quote date (date only): ${quoteDateOnly.toISOString().split('T')[0]}`);
+        console.log(`   Today (date only): ${today.toISOString().split('T')[0]}`);
+        
+        if (quoteDateOnly.getTime() !== today.getTime()) {
+          mismatches.push(`Quote date should be today: expected ${today.toISOString().split('T')[0]}, got ${quoteDateOnly.toISOString().split('T')[0]} (raw: ${xeroQuote.Date})`);
+        }
+        
+        // Expiry date should be 30 days from issue date (as per code: 30 * 24 * 60 * 60 * 1000)
+        if (xeroQuote.ExpiryDate) {
+          const expiryDate = parseMicrosoftDate(xeroQuote.ExpiryDate);
+          
+          console.log(`   Raw expiry date: ${xeroQuote.ExpiryDate}`);
+          console.log(`   Parsed expiry date: ${expiryDate.toISOString()}`);
+          
+          if (isNaN(expiryDate.getTime())) {
+            mismatches.push(`Invalid expiry date format: ${xeroQuote.ExpiryDate}`);
+          } else {
+            const expectedExpiryDate = new Date(quoteDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+            const expectedExpiryDateOnly = new Date(expectedExpiryDate.getFullYear(), expectedExpiryDate.getMonth(), expectedExpiryDate.getDate());
+            const actualExpiryDateOnly = new Date(expiryDate.getFullYear(), expiryDate.getMonth(), expiryDate.getDate());
+            
+            console.log(`   Expected expiry (date only): ${expectedExpiryDateOnly.toISOString().split('T')[0]}`);
+            console.log(`   Actual expiry (date only): ${actualExpiryDateOnly.toISOString().split('T')[0]}`);
+            
+            if (actualExpiryDateOnly.getTime() !== expectedExpiryDateOnly.getTime()) {
+              mismatches.push(`Expiry date should be 30 days from issue date: expected ${expectedExpiryDateOnly.toISOString().split('T')[0]}, got ${actualExpiryDateOnly.toISOString().split('T')[0]} (raw: ${xeroQuote.ExpiryDate})`);
+            }
+          }
+        } else {
+          mismatches.push(`Expiry date is missing (should be 30 days from issue date)`);
+        }
+      }
+    } else {
+      mismatches.push(`Quote date is missing`);
+    }
+  } catch (dateError) {
+    mismatches.push(`Error validating dates: ${dateError.message}`);
+  }
+  
+  // Check reference format for Pipedrive Deal ID
+  if (expectedData.dealId) {
+    const expectedReference = `Pipedrive Deal ID: ${expectedData.dealId}`;
+    if (xeroQuote.Reference !== expectedReference) {
+      mismatches.push(`Reference format incorrect: expected "${expectedReference}", got "${xeroQuote.Reference || 'N/A'}"`);
+    }
   }
   
   if (mismatches.length === 0) {
