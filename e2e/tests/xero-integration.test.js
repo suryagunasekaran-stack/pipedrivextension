@@ -80,44 +80,11 @@ describe('E2E: Xero Integration Tests', () => {
       });
       
       console.log(`✅ Server is running (status: ${response.status})`);
-      
-      // Try to get available routes for debugging
-      await checkAvailableRoutes();
-      
       return true;
     } catch (error) {
       console.log(`❌ Server is not running at ${serverUrl}`);
       console.log(`💡 Please start your server with: npm start`);
       throw new Error(`Server not running. Please start server at ${serverUrl} before running tests.`);
-    }
-  }
-
-  // Helper function to check available routes (for debugging)
-  async function checkAvailableRoutes() {
-    const commonRoutes = [
-      '/api/routes',
-      '/routes',
-      '/api/health',
-      '/health',
-      '/api/xero',
-      '/xero'
-    ];
-    
-    console.log(`🔍 Checking for available routes...`);
-    
-    for (const route of commonRoutes) {
-      try {
-        const response = await fetch(`${serverUrl}${route}`, {
-          method: 'GET',
-          signal: AbortSignal.timeout(3000)
-        });
-        
-        if (response.ok) {
-          console.log(`✅ Found route: ${route} (${response.status})`);
-        }
-      } catch (error) {
-        // Route doesn't exist, that's fine
-      }
     }
   }
 
@@ -346,41 +313,17 @@ describe('E2E: Xero Integration Tests', () => {
   // Helper function to get Xero quote using backend endpoint
   async function getXeroQuoteByNumber(quoteNumber) {
     try {
-      console.log(`🔍 Fetching Xero quote via backend: ${quoteNumber}`);
-      
       const response = await fetch(`${serverUrl}/api/test/xero/quote/${quoteNumber}`, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
-        }
+        headers: { 'Content-Type': 'application/json' }
       });
-
-      console.log(`📡 Backend response status: ${response.status} ${response.statusText}`);
       
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.log(`❌ Backend error:`, errorText);
-        return null;
-      }
-
+      if (!response.ok) return null;
+      
       const result = await response.json();
-      console.log(`📋 Backend response:`, {
-        quoteNumber: result.QuoteNumber,
-        quoteId: result.QuoteID,
-        status: result.Status,
-        total: result.Total,
-        lineItems: result.LineItems?.length || 0
-      });
-      
-      if (result.QuoteNumber === quoteNumber) {
-        console.log(`✅ Found Xero quote via backend: ${result.QuoteNumber}`);
-        return result;
-      }
-      
-      console.log(`⚠️  Quote number mismatch: expected ${quoteNumber}, got ${result.QuoteNumber}`);
-      return null;
+      return result.QuoteNumber === quoteNumber ? result : null;
     } catch (error) {
-      console.log(`❌ Error fetching Xero quote via backend:`, error.message);
+      console.log(`❌ Error fetching Xero quote ${quoteNumber}:`, error.message);
       return null;
     }
   }
@@ -388,41 +331,17 @@ describe('E2E: Xero Integration Tests', () => {
   // Helper function to get Xero quote by ID
   async function getXeroQuoteById(quoteId) {
     try {
-      console.log(`🔍 Fetching Xero quote by ID: ${quoteId}`);
-      
       const response = await fetch(`${serverUrl}/api/test/xero/quote-by-id/${quoteId}`, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
-        }
+        headers: { 'Content-Type': 'application/json' }
       });
-
-      console.log(`📡 Backend response status: ${response.status} ${response.statusText}`);
       
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.log(`❌ Backend error:`, errorText);
-        return null;
-      }
-
+      if (!response.ok) return null;
+      
       const result = await response.json();
-      console.log(`📋 Backend response:`, {
-        quoteNumber: result.QuoteNumber,
-        quoteId: result.QuoteID,
-        status: result.Status,
-        total: result.Total,
-        lineItems: result.LineItems?.length || 0
-      });
-      
-      if (result.QuoteID === quoteId) {
-        console.log(`✅ Found Xero quote by ID: ${result.QuoteNumber} (${result.QuoteID})`);
-        return result;
-      }
-      
-      console.log(`⚠️  Quote ID mismatch: expected ${quoteId}, got ${result.QuoteID}`);
-      return null;
+      return result.QuoteID === quoteId ? result : null;
     } catch (error) {
-      console.log(`❌ Error fetching Xero quote by ID:`, error.message);
+      console.log(`❌ Error fetching Xero quote ${quoteId}:`, error.message);
       return null;
     }
   }
@@ -437,54 +356,29 @@ describe('E2E: Xero Integration Tests', () => {
     console.log(`🧹 Cleaning up ${createdXeroQuoteIds.length} created Xero quotes...`);
     
     let successCount = 0;
-    let failCount = 0;
     
     for (const quoteId of createdXeroQuoteIds) {
       try {
-        console.log(`🗑️  Voiding Xero quote ID: ${quoteId}...`);
-        
         const deleteResponse = await fetch(`${serverUrl}/api/test/xero/quote/${quoteId}`, {
           method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          signal: AbortSignal.timeout(10000) // 10 second timeout
+          headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(10000)
         });
-        
-        console.log(`📡 Delete response status: ${deleteResponse.status}`);
         
         if (deleteResponse.ok) {
           const result = await deleteResponse.json();
-          console.log(`✅ Successfully voided Xero quote: ${result.deletedQuote?.QuoteNumber || quoteId}`);
-          console.log(`   Quote status changed to: ${result.deletedQuote?.Status || 'VOIDED'}`);
+          console.log(`✅ Deleted Xero quote: ${result.deletedQuote?.QuoteNumber || quoteId}`);
           successCount++;
         } else {
-          let errorResult;
-          try {
-            errorResult = await deleteResponse.json();
-          } catch (parseError) {
-            errorResult = { error: 'Failed to parse error response', text: await deleteResponse.text() };
-          }
-          console.log(`⚠️  Failed to void Xero quote ID: ${quoteId} - Status: ${deleteResponse.status}`);
-          console.log(`   Error details:`, errorResult);
-          failCount++;
+          console.log(`⚠️  Failed to delete quote ${quoteId} - Status: ${deleteResponse.status}`);
         }
       } catch (error) {
-        console.log(`❌ Error voiding Xero quote ID: ${quoteId}:`, error.message);
-        console.log(`   Error stack:`, error.stack);
-        failCount++;
+        console.log(`❌ Error deleting quote ${quoteId}:`, error.message);
       }
     }
     
-    console.log(`🧹 Xero cleanup complete: ${successCount} voided, ${failCount} failed`);
-    
-    // If there were failures, list the quote IDs that couldn't be cleaned up
-    if (failCount > 0) {
-      console.log(`⚠️  Manual cleanup may be required for failed quotes`);
-      console.log(`💡 You can manually void these quotes in Xero or use the test endpoints`);
-    }
-    
-    createdXeroQuoteIds = []; // Clear the array regardless of success/failure
+    console.log(`🧹 Cleanup complete: ${successCount}/${createdXeroQuoteIds.length} deleted`);
+    createdXeroQuoteIds = [];
   }
 
   // Helper function to get deal custom fields
@@ -732,6 +626,6 @@ describe('E2E: Xero Integration Tests', () => {
       console.log(`   - Xero Quote: ${quoteNumber}`);
       console.log(`   - Quote ID: ${quoteId}`);
       console.log(`   - Total Value: $${dealData.value}`);
-          }, 60000); // 60 second timeout
+    }, 60000); // 60 second timeout
   });
-}); 
+});
