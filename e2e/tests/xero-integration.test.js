@@ -3,6 +3,8 @@
  * 
  * Tests the integration between Pipedrive deals and Xero quotes
  * Focus: Deal → Products → Xero Quote → Verification
+ * 
+ * PREREQUISITE: Make sure your server is running on http://localhost:3000
  */
 
 import { jest } from '@jest/globals';
@@ -24,8 +26,11 @@ describe('E2E: Xero Integration Tests', () => {
     await testEnv.setup();
     testConfig = await testEnv.getTestConfig();
     
-    // Set server URL (adjust based on your setup)
+    // Set server URL
     serverUrl = process.env.SERVER_URL || 'http://localhost:3000';
+    
+    // Check if server is running
+    await checkServerRunning();
     
     // Find TEST person and organization
     await findTestContactsAndOrg();
@@ -39,14 +44,38 @@ describe('E2E: Xero Integration Tests', () => {
   }, 30000);
 
   afterAll(async () => {
-    // Conditional cleanup
-    if (CLEANUP_ENABLED) {
-      await cleanupCreatedDeals();
-    } else {
-      console.log(`⏭️  Skipping cleanup. Created ${createdDealIds.length} deals: ${createdDealIds.join(', ')}`);
+    // Always cleanup deals
+    await cleanupCreatedDeals();
+    
+    // Cleanup test environment
+    if (testEnv) {
+      await testEnv.cleanup();
     }
-    await testEnv.cleanup();
+    
+    // Force cleanup any remaining handles
+    if (global.gc) {
+      global.gc();
+    }
   });
+
+  // Helper function to check if server is running
+  async function checkServerRunning() {
+    try {
+      console.log(`🔍 Checking if server is running at ${serverUrl}...`);
+      
+      const response = await fetch(serverUrl, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000)
+      });
+      
+      console.log(`✅ Server is running (status: ${response.status})`);
+      return true;
+    } catch (error) {
+      console.log(`❌ Server is not running at ${serverUrl}`);
+      console.log(`💡 Please start your server with: npm start`);
+      throw new Error(`Server not running. Please start server at ${serverUrl} before running tests.`);
+    }
+  }
 
   // Helper function to find TEST person and organization
   async function findTestContactsAndOrg() {
@@ -83,27 +112,41 @@ describe('E2E: Xero Integration Tests', () => {
 
   // Helper function to cleanup created deals
   async function cleanupCreatedDeals() {
+    if (createdDealIds.length === 0) {
+      console.log('🧹 No deals to cleanup');
+      return;
+    }
+
     console.log(`🧹 Cleaning up ${createdDealIds.length} created deals...`);
+    
+    let successCount = 0;
+    let failCount = 0;
     
     for (const dealId of createdDealIds) {
       try {
+        console.log(`🗑️  Deleting deal ID: ${dealId}...`);
+        
         const deleteResponse = await fetch(
           `https://${testConfig.companyDomain}.pipedrive.com/v1/deals/${dealId}?api_token=${testConfig.apiToken}`,
           { method: 'DELETE' }
         );
         
         if (deleteResponse.ok) {
-          console.log(`✅ Deleted deal ID: ${dealId}`);
+          console.log(`✅ Successfully deleted deal ID: ${dealId}`);
+          successCount++;
         } else {
-          console.log(`⚠️  Failed to delete deal ID: ${dealId}`);
+          const errorResult = await deleteResponse.json();
+          console.log(`⚠️  Failed to delete deal ID: ${dealId} - Status: ${deleteResponse.status}`, errorResult);
+          failCount++;
         }
       } catch (error) {
-        console.log(`❌ Error deleting deal ID: ${dealId}`, error.message);
+        console.log(`❌ Error deleting deal ID: ${dealId}:`, error.message);
+        failCount++;
       }
     }
     
+    console.log(`🧹 Cleanup complete: ${successCount} deleted, ${failCount} failed`);
     createdDealIds = []; // Clear the array
-    console.log('🧹 Cleanup complete');
   }
 
   // Helper function to create a product in Pipedrive
@@ -206,6 +249,8 @@ describe('E2E: Xero Integration Tests', () => {
   async function createXeroQuote(dealId, companyId) {
     try {
       console.log(`🔄 Creating Xero quote for deal ${dealId}, company ${companyId}`);
+      console.log(`📡 POST ${serverUrl}/api/xero/quote`);
+      console.log(`📋 Request body:`, { pipedriveDealId: dealId, pipedriveCompanyId: companyId });
       
       const response = await fetch(`${serverUrl}/api/xero/quote`, {
         method: 'POST',
@@ -218,17 +263,32 @@ describe('E2E: Xero Integration Tests', () => {
         })
       });
 
-      const result = await response.json();
+      console.log(`📡 Response status: ${response.status} ${response.statusText}`);
+      
+      let result;
+      try {
+        result = await response.json();
+        console.log(`📋 Response body:`, result);
+      } catch (parseError) {
+        console.log(`❌ Failed to parse response as JSON:`, parseError.message);
+        const textResult = await response.text();
+        console.log(`📋 Raw response:`, textResult);
+        return null;
+      }
       
       if (response.ok) {
-        console.log(`✅ Xero quote created successfully:`, result);
+        console.log(`✅ Xero quote created successfully`);
+        console.log(`📋 Quote Number: ${result.quoteNumber}`);
+        console.log(`📋 Quote ID: ${result.quoteId}`);
         return result;
       } else {
-        console.log(`⚠️  Failed to create Xero quote:`, result);
+        console.log(`❌ Failed to create Xero quote - Status: ${response.status}`);
+        console.log(`📋 Error details:`, result);
         return null;
       }
     } catch (error) {
-      console.log(`❌ Error creating Xero quote:`, error.message);
+      console.log(`❌ Network error creating Xero quote:`, error.message);
+      console.log(`📋 Error stack:`, error.stack);
       return null;
     }
   }
@@ -443,6 +503,6 @@ describe('E2E: Xero Integration Tests', () => {
       console.log(`   - Xero Quote: ${quoteNumber}`);
       console.log(`   - Quote ID: ${quoteId}`);
       console.log(`   - Total Value: $${dealData.value}`);
-    }, 60000); // 60 second timeout for this comprehensive test
+          }, 60000); // 60 second timeout
   });
 }); 
