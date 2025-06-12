@@ -81,6 +81,54 @@ app.get('/api/status', (req, res) => {
     });
 });
 
+// Deployment info endpoint - shows where the app is deployed and configuration
+app.get('/deployment-info', (req, res) => {
+    const deploymentInfo = {
+        message: '🚀 Pipedrive-Xero Integration API',
+        status: 'deployed and running',
+        environment: process.env.NODE_ENV || 'development',
+        timestamp: new Date().toISOString(),
+        uptime: `${Math.floor(process.uptime())} seconds`,
+        deployment: {
+            apiBaseUrl: process.env.API_BASE_URL || `http://localhost:${port}`,
+            frontendBaseUrl: process.env.FRONTEND_BASE_URL || 'http://localhost:3001',
+            railwayUrl: process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : 'Railway URL not available',
+            isProduction: process.env.NODE_ENV === 'production'
+        },
+        endpoints: {
+            health: '/health',
+            auth: '/auth',
+            pipedriveAction: '/pipedrive-action',
+            xeroStatus: '/api/xero/status',
+            createQuote: '/api/xero/create-quote'
+        },
+        integrations: {
+            pipedrive: {
+                configured: !!(process.env.CLIENT_ID && process.env.CLIENT_SECRET),
+                redirectUri: process.env.REDIRECT_URI || 'Not configured'
+            },
+            xero: {
+                configured: !!(process.env.XERO_CLIENT_ID && process.env.XERO_CLIENT_SECRET),
+                redirectUri: process.env.XERO_REDIRECT_URI || 'Not configured'
+            },
+            database: {
+                configured: !!process.env.MONGODB_URI,
+                type: process.env.MONGODB_URI ? 'MongoDB' : 'Not configured'
+            }
+        },
+        version: '1.0.0',
+        nodeVersion: process.version,
+        platform: process.platform
+    };
+    
+    res.json(deploymentInfo);
+});
+
+// Root endpoint with deployment info
+app.get('/', (req, res) => {
+    res.redirect('/deployment-info');
+});
+
 // Test endpoint to demonstrate enhanced logging
 app.get('/api/test-logging', 
     logRoute('Test Enhanced Logging'),
